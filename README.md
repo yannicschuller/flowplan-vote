@@ -1,0 +1,174 @@
+# flowplan-vote
+
+A small, self-hosted web service to vote on [Flowplan](https://github.com/yannicschuller/flowplan)'s nightly UI gallery ([gallery.flowplan.org](https://gallery.flowplan.org)) – Tinder-style. Sign in with GitHub, then swipe through the screenshots one at a time: **👍** (right), **👎** (left) or **skip** (up), with an optional short comment. The votes stay in a SQLite database; [flowplan-admin](https://github.com/yannicschuller/flowplan-admin) reads them through the [admin API](#admin-api) and turns the 👎 scenes and their comments into a ready-to-paste prompt for Claude Code.
+
+The Flowplan server itself is not involved. Interface in German and English.
+
+## How it works
+
+### The gallery
+
+The service fetches `${GALLERY_URL}/manifest.json` on the server and caches it for ten minutes (a failed fetch keeps serving the last good copy and is retried after a minute). It uses these fields of the manifest (`flowplan/scripts/gallery/compare.ts`):
+
+- top level: `generated`, `commit`, `commitShort`, `version`, `groups`, `variants`, `shots`;
+- per shot: `scene`, `group`, `title`, `path`, `variant` (`desktop-light`, `desktop-dark`, `phone-light`, `phone-dark`), `file`, `thumb` (relative to `GALLERY_URL`), `width`, `height`, `hash` (SHA-256 of the pixels), `error`.
+
+Shots with `error`, without `file` or `hash`, or with a `file` that is not a plain relative path are left out. Images are loaded by the browser straight from the gallery: the CSP's `img-src` allows `'self'`, `data:` and the gallery's origin – nothing else external.
+
+### Votes and the deck
+
+A vote is one verdict – `up`, `down` or `skip` – of one person on one **image**: scene + variant + pixel hash. Voting the same image again replaces the vote. Comments are optional, at most 500 characters, shown only as text.
+
+The **deck** (what you get to see) is every shot of the current gallery on whose current image you have no vote yet: shots never voted on, and shots whose `hash` changed since your last vote on that scene and variant (marked "Changed · before 👎"). "Show all" brings back the voted ones too, with your vote on the card. Filters: gallery group and variant.
+
+A vote sent just before a new gallery run still finds its image: the last three runs seen are kept in memory.
+
+### Voting screen
+
+- One screenshot, as large as the screen allows (desktop and phone), with title, scene id, group, variant (Desktop/Phone · light/dark) and the progress (`37 / 412`). The next two images are already loaded in the stack behind, one more is preloaded.
+- **Swipe** (pointer events – touch, pen and mouse): right 👍, left 👎, up skip. The card follows the finger, tilts, gets a green or red tint and a stamp; past the threshold (a quarter of the width, a fifth of the height, or a quick flick) it flies out, otherwise it springs back.
+- **Buttons** for undo, 👎, skip, 👍 and comment, with accessible names.
+- **Keys**: `→` 👍, `←` 👎, `↓` skip, `K` comment, `Z` undo, `Enter` full image (also double-click), `?` shortcuts. `Esc` leaves the comment field and keeps the text.
+- **Comment** before the verdict (sent with it) or after it ("Add a comment" under the buttons, saved at once).
+- **Undo** puts the last card back and restores what you had on that image before (up to 50 steps).
+- **Offline**: votes go out at once; when the network is gone they wait in a queue (memory and `localStorage`, per person) and are sent again when the browser is back online or every 20 seconds. One entry per image, so the last change wins.
+- The verdict is announced to screen readers (`role="status"`); focus states are visible; with `prefers-reduced-motion` the cards don't move.
+- Empty deck: "Alles bewertet – die nächste Galerie kommt heute Nacht".
+
+**My votes** (`/mine`): every own vote, newest first, filterable by verdict, comment, group, variant and text; change the verdict, edit the comment, delete (two steps – the image then comes back into the deck).
+
+### Who can vote
+
+Only the GitHub logins in `VOTE_ALLOWED_LOGINS` (comma-separated, case-insensitive). Empty means nobody – the sign-in page says so. Everyone else sees "No access" after signing in, and **nothing is stored about them** (no account, no session). The list is checked on every request: a login taken off the list loses access at once.
+
+## Admin API
+
+For flowplan-admin (server to server): every request needs `Authorization: Bearer <VOTE_ADMIN_TOKEN>`, compared in constant time. Without a token configured (or with one shorter than 24 characters) every path answers **404**; a missing or wrong token answers **401** (rate-limited per hashed address). JSON, no CORS headers, `Cache-Control: no-store`. Times in answers are ISO 8601 strings (`createdAt`, `lastVoteAt`, `latestVoteAt`, `galleryGenerated`); the `since` parameter is milliseconds since 1970.
+
+### `GET /api/admin/summary`
+
+```jsonc
+{
+  "gallery": { "generated": "2026-11-19T02:00:00.000Z", "commit": "<sha>", "commitShort": "a1b2c3d", "version": "1.42.0", "shots": 412 }, // null when the gallery is unreachable
+  "totals": { "up": 120, "down": 31, "skip": 9, "comments": 22, "voters": 2 },
+  "latestVoteAt": "2026-11-19T06:40:00.000Z", // null without votes
+  "byGroup": [{ "group": "Pages", "up": 30, "down": 5, "skip": 1 }] // in the gallery's group order
+}
+```
+
+Totals count all stored votes (all gallery runs).
+
+### `GET /api/admin/votes?verdict=up|down|skip&group=&scene=&since=<ms>&limit=≤1000&cursor=`
+
+```jsonc
+{
+  "votes": [{ "id": 7, "login": "yannicschuller", "scene": "home", "group": "Pages", "title": "Home", "variant": "phone-dark",
+              "hash": "…", "galleryGenerated": "…", "commit": "<sha>", "version": "1.42.0", "verdict": "down",
+              "comment": "Tab bar cut off", "createdAt": "2026-11-19T06:40:00.000Z", "current": true }],
+  "nextCursor": "1763534400000.7" // opaque; null on the last page
+}
+```
+
+Newest first (`createdAt`, then `id`). `limit` defaults to 100 (1 … 1000). `since` keeps votes with `createdAt >= since`. `current`: the vote's `hash` equals the current gallery's hash for its scene and variant. Pass `nextCursor` as `cursor` for the next page. A changed vote (new verdict or comment) gets a new `createdAt`.
+
+### `GET /api/admin/scenes`
+
+```jsonc
+{
+  "scenes": [{ "scene": "home", "group": "Pages", "title": "Home", "up": 3, "down": 5, "skip": 0, "comments": 2,
+               "lastVerdict": "down", "lastVoteAt": "2026-11-19T06:40:00.000Z", "current": true,
+               "file": "shots/home--desktop-light.png", "thumb": "shots/home--desktop-light.png",
+               "history": [{ "galleryGenerated": "2026-11-18T02:00:00.000Z", "commitShort": "9f8e7d6", "up": 1, "down": 3 }] }]
+}
+```
+
+One entry per voted scene, sorted by 👎 (then latest vote). `group`, `title` and `lastVerdict` come from the newest vote; `current` means the newest vote is on an image the current gallery still shows. `file` and `thumb` (relative to `GALLERY_URL`) are the current gallery's `desktop-light` shot of the scene, else its first variant; both are left out when the scene is no longer in the gallery. `history` is the trend: 👍/👎 per gallery run, oldest first.
+
+### `GET /api/admin/prompt?scope=current|all&group=&includeUp=0|1`
+
+```jsonc
+{ "prompt": "# Design-Feedback aus flowplan-vote (Galerie vom 19. Nov. 2026, Commit a1b2c3d)\n…", "scenes": 4 }
+```
+
+A German Markdown instruction for Claude Code: per 👎 scene (in the gallery's order) the scene id, group, title, the variants voted down, the image links (`${GALLERY_URL}/<file>`), the comments of the 👎 votes verbatim as quotes with login and variant, and the number of voters. `scope=current` (default) only counts votes on the current images; `scope=all` every vote. `group` limits it to one group. `includeUp=1` adds the 👍 scenes without any 👎 as "Gefällt (nicht anfassen)". It ends with: "Bitte wie bei /design-review: Screenshots ansehen, Befunde mit Vorschlägen auflisten und mich fragen, was umgesetzt wird – nichts ändern vor meinem OK." `scenes` is the number of 👎 scenes.
+
+### `GET /api/admin/export?format=csv|json`
+
+Every vote (fields as in `/votes`, newest first) as a download (`Content-Disposition: attachment`). JSON: `{ "votes": [...] }` (the default). CSV: a header line, RFC 4180 quoting, CRLF; cells starting with `= + - @` get a leading `'` so spreadsheets don't run them.
+
+## Privacy and security
+
+- No tracking, no analytics, no external fonts, scripts or CDNs.
+- Cookies: the session (`fv_session`, httpOnly, SameSite=Lax, Secure under https, 30 days; the database keeps only its SHA-256; signing out deletes it); during sign-in a ten-minute `fv_oauth` cookie for the OAuth `state`; the language cookie `fv_lang` only after the visitor switches the language. `localStorage` holds unsent votes only while offline.
+- Sign-in reads `GET /user` once with the user's OAuth token; the token is not stored. Stored per allowed user: GitHub id, login and name.
+- IP addresses are never stored: sign-in and wrong admin tokens are rate-limited by a daily rotating HMAC of the address (`ipKey()`). Votes are limited per user (180 per minute, 5,000 per day), the deck to 120 loads per minute; over the limit the API answers 429. Request bodies are size-limited.
+- CSRF: every writing request must carry an `Origin` (or, without it, a `Referer`) equal to the origin of `VOTE_URL`, else 403; plus SameSite=Lax.
+- A strict Content Security Policy (`proxy.ts`): scripts only with the per-request nonce (`strict-dynamic`), styles only from the stylesheet, no inline scripts or style attributes, images only from this site and the gallery, no framing.
+
+## Environment variables
+
+| Variable | Required | Meaning |
+| --- | --- | --- |
+| `VOTE_URL` | yes | The public base URL, e.g. `https://vote.flowplan.org` (Secure cookies, OAuth callback, Origin check). |
+| `VOTE_ALLOWED_LOGINS` | yes | GitHub logins that may vote, comma-separated, case-insensitive. Empty = nobody. |
+| `VOTE_GITHUB_CLIENT_ID` | yes | The GitHub App's client id (sign-in). |
+| `VOTE_GITHUB_CLIENT_SECRET` | yes | The GitHub App's client secret. |
+| `VOTE_ADMIN_TOKEN` | for flowplan-admin | Bearer token of the admin API, at least 24 characters (`openssl rand -hex 32`). The same value goes into flowplan-admin. Unset: admin API off (404). |
+| `GALLERY_URL` | – | The UI gallery (default `https://gallery.flowplan.org`). |
+| `VOTE_DATA_DIR` | – | Directory for the SQLite database and the generated key (default `./data`; `/app/data` in the image). |
+| `VOTE_TIME_ZONE` | – | IANA time zone for dates on the pages and in the prompt (default `Europe/Berlin`). |
+| `PORT` | – | Port of the server (default 3000). |
+| `VOTE_GITHUB_API` | – | Tests only: base URL of a GitHub mock (the OAuth code exchange goes there too). |
+
+Secrets come only from the environment – see [`.env.example`](.env.example).
+
+## GitHub App
+
+Sign-in uses a GitHub App's **user authorization** only – the App needs no permissions and is never installed on a repository. Create it under Settings → Developer settings → GitHub Apps → New:
+
+1. **GitHub App name**: e.g. "Flowplan Vote"; **Homepage URL**: `<VOTE_URL>`.
+2. **Callback URL**: `<VOTE_URL>/api/auth/callback` (e.g. `https://vote.flowplan.org/api/auth/callback`). "Request user authorization (OAuth) during installation" **off**; "Expire user authorization tokens" as you like (the token is used once).
+3. **Webhook**: **off** (uncheck "Active").
+4. **Permissions**: none (account permissions are not needed – `GET /user` works without).
+5. **Where can this GitHub App be installed?**: "Only on this account" is enough – people sign in without installing it.
+6. Create it, copy the **Client ID** (→ `VOTE_GITHUB_CLIENT_ID`) and generate a **client secret** (→ `VOTE_GITHUB_CLIENT_SECRET`). No private key, no App ID needed.
+
+## Deploy (Coolify)
+
+The image is built on every push to main and published as `ghcr.io/yannicschuller/flowplan-vote:latest` (and `:sha-…`), for linux/amd64 and linux/arm64.
+
+1. In Coolify, create a resource from the image (or the Dockerfile), port 3000, domain `vote.flowplan.org` (DNS: a record pointing to the Coolify server).
+2. Add a persistent volume at `/app/data`.
+3. Set the environment variables above; `VOTE_URL` must be the public **https** URL.
+4. Coolify's reverse proxy terminates TLS; the healthcheck is `GET /api/health` → `{"service":"flowplan-vote","status":"ok"}`.
+5. Optional: the repository secrets `COOLIFY_WEBHOOK` and `COOLIFY_TOKEN` let the Docker workflow roll out every new `:latest`.
+6. In flowplan-admin set `VOTE_URL` and the same `VOTE_ADMIN_TOKEN`.
+
+## Local development
+
+```sh
+npm ci
+cp .env.example .env.local   # fill in what you need
+npm run dev                  # http://127.0.0.1:3000
+```
+
+Checks (all must be green before a commit):
+
+```sh
+npm run typecheck
+npm test            # unit and route tests, no network (gallery and GitHub are local mocks)
+npm run build
+```
+
+Browser smoke test (Playwright, after `npm run build`; set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to use an installed Chromium):
+
+```sh
+npm run test:browser
+SCREENSHOTS_DIR=/tmp/shots npm run test:browser   # also screenshots of the voting screen and pages
+```
+
+It starts the standalone build with a temporary data directory, a fake gallery (`tests/gallery-mock.ts`, generated PNG screenshots) and sessions created directly in the database – no GitHub, no real account.
+
+## License
+
+[AGPL-3.0-only](LICENSE), like Flowplan.

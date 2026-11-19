@@ -1,0 +1,14 @@
+node_modules/
+.next/
+.next-*/
+/data/
+/data-test/
+.env*
+!.env.example
+test-results/
+playwright-report/
+*.tsbuildinfo
+next-env.d.ts
+
+# Local agent worktrees
+.claude/worktrees/

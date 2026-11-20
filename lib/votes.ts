@@ -3,6 +3,7 @@
 // without a vote on their current image (never voted, or the pixels changed
 // since the last vote on that scene and variant).
 import { all, now, one, run, transaction } from "./db";
+import { hmac } from "./secret";
 import { HttpError, str } from "./http";
 import { findShot, imageUrl, shotKey, type Gallery } from "./gallery";
 import type { SessionUser } from "./auth";
@@ -92,7 +93,11 @@ export function deck(user: { id: number }, g: Gallery, filter: DeckFilter = {}):
       changed: !mine && last ? { verdict: last.verdict, at: last.created_at } : null,
     });
   }
-  return cards;
+  // A random order per person and gallery run instead of the gallery's
+  // order: stable across reloads and undo (keyed, not Math.random), new for
+  // every nightly run and different for every person.
+  const rank = (c: Card) => hmac("deck", `${user.id}\u0000${g.generated}\u0000${shotKey(c)}\u0000${c.hash}`);
+  return cards.map((c) => [rank(c), c] as const).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).map(([, c]) => c);
 }
 
 // Counts for the progress: shots in the filter, and how many of them are voted on (current image).

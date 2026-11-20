@@ -144,13 +144,17 @@ test("CSRF and session: writing needs this site's Origin and a session", async (
   assert.equal(r.status, 401);
 });
 
-test("the deck: unvoted images, then changed ones; show all; filters", async () => {
+test("the deck: unvoted images in a random order per person and run, changed ones come back; show all; filters", async () => {
   allow("ben");
   const { cookie } = signIn("ben");
   let d = await deckOf(cookie);
   assert.equal(d.cards.length, 12, "the failed shot is not in the deck");
   assert.deepEqual(d.progress, { total: 12, voted: 0 });
-  assert.equal(d.cards[0].image, `${mock.base}/shots/home--desktop-light.png`);
+  // A random order, not the gallery's – stable for this person and run.
+  const order = (cards: { scene: string; variant: string }[]) => cards.map((c) => `${c.scene}--${c.variant}`);
+  assert.deepEqual(order((await deckOf(cookie)).cards), order(d.cards), "the same order on reload");
+  assert.notDeepEqual(order(d.cards), order(defaultShots().filter((s) => !s.error)), "not the gallery's order");
+  assert.ok(d.cards.some((c: { image: string }) => c.image === `${mock.base}/shots/home--desktop-light.png`));
 
   assert.equal((await cast(cookie, { ...homeDesktop, verdict: "down", comment: "  Too much space on the left  " })).status, 200);
   assert.equal((await cast(cookie, { scene: "home", variant: "phone-dark", hash: "home-phone-dark-h1", verdict: "skip" })).status, 200);
@@ -159,7 +163,7 @@ test("the deck: unvoted images, then changed ones; show all; filters", async () 
   assert.deepEqual(d.progress, { total: 12, voted: 2 });
   const all = await deckOf(cookie, "?all=1");
   assert.equal(all.cards.length, 12);
-  assert.deepEqual(all.cards[0].vote, { verdict: "down", comment: "Too much space on the left" });
+  assert.deepEqual(all.cards.find((c: { scene: string; variant: string }) => c.scene === "home" && c.variant === "desktop-light").vote, { verdict: "down", comment: "Too much space on the left" });
   assert.equal((await deckOf(cookie, "?group=Settings")).cards.length, 4);
   assert.equal((await deckOf(cookie, "?variant=phone-dark")).cards.length, 2);
 

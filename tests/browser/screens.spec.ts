@@ -37,7 +37,19 @@ test("voting screen and pages at desktop and phone size, light and dark", async 
       await page.goto("/");
       await expect(page.locator(".vote-card.depth-0 img")).toHaveClass(/ready/);
       await page.waitForLoadState("networkidle");
+      // The guide on the first visit (the demo card at rest), then closed.
+      await expect(page.locator("dialog.help")).toBeVisible();
+      await page.locator(".swipe-card, .swipe-stamp").evaluateAll((els) => els.forEach((el) => el.getAnimations().forEach((a) => {
+        a.pause();
+        a.currentTime = 0;
+      })));
+      await shot("guide");
+      await page.locator("dialog.help .help-body").evaluate((el) => el.scrollTo(0, el.scrollHeight));
+      await shot("guide-end");
+      await page.keyboard.press("Escape");
+      await expect(page.locator("dialog.help")).toBeHidden();
       await shot("vote");
+      await page.locator(".actions").screenshot({ path: join(dir!, `actions-${viewport.name}-${colorScheme}.png`) });
 
       // Mid-drag to the left: tilt, red tint, stamp.
       const card = page.locator(".vote-card.depth-0");

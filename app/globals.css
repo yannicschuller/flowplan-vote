@@ -948,69 +948,107 @@ main:has(.voter) {
   gap: 8px;
 }
 
-/* Action buttons */
+/* Action buttons: a round button with its label (and key cap) under it, all one button. */
 .actions {
   display: flex;
   justify-content: center;
+  align-items: flex-start;
+  gap: clamp(6px, 2vw, 18px);
+}
+.act-button {
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: clamp(10px, 2.5vw, 22px);
+  gap: 6px;
+  min-width: 76px;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: var(--secondary);
+  font: inherit;
+  cursor: pointer;
+  border-radius: 12px;
+}
+.act-button:focus-visible {
+  outline: none;
+}
+.act-button:focus-visible .act {
+  outline: 2px solid var(--blue);
+  outline-offset: 3px;
+}
+.act-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 .act {
-  position: relative;
   display: grid;
   place-items: center;
   width: 52px;
   height: 52px;
+  margin-block: 8px;
   border-radius: 50%;
   border: 1px solid var(--border);
   background: var(--card);
   color: var(--secondary);
-  cursor: pointer;
   box-shadow: 0 2px 10px #1d1a1410;
   transition:
     transform 0.15s var(--ease-out),
     background 0.15s var(--ease-out),
     border-color 0.15s var(--ease-out);
 }
-.act:hover:not(:disabled) {
+.act-button:hover:not(:disabled) .act {
   transform: translateY(-2px);
   color: var(--text);
 }
-.act:active:not(:disabled) {
+.act-button:hover:not(:disabled) .act-label {
+  color: var(--text);
+}
+.act-button:active:not(:disabled) .act {
   transform: scale(0.94);
 }
-.act:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-.act.like,
-.act.nope {
+.act-button.like .act,
+.act-button.nope .act {
   width: 68px;
   height: 68px;
+  margin-block: 0;
   font-size: 28px;
 }
-.act.like {
+.act-button.like .act {
   border-color: color-mix(in srgb, var(--like-solid) 45%, var(--border));
   background: var(--like-bg);
 }
-.act.like:hover:not(:disabled) {
+.act-button.like:hover:not(:disabled) .act {
   border-color: var(--like-solid);
 }
-.act.nope {
+.act-button.nope .act {
   border-color: color-mix(in srgb, var(--nope-solid) 45%, var(--border));
   background: var(--nope-bg);
 }
-.act.nope:hover:not(:disabled) {
+.act-button.nope:hover:not(:disabled) .act {
   border-color: var(--nope-solid);
 }
-.act.comment.active {
+.act-button.comment.active .act {
   background: var(--blue-light);
   color: var(--blue);
   border-color: var(--blue);
 }
-.act kbd {
-  position: absolute;
-  bottom: -9px;
+.act-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 560;
+  line-height: 1.2;
+  white-space: nowrap;
+  color: var(--secondary);
+}
+.act-button.like .act-label {
+  color: var(--like);
+}
+.act-button.nope .act-label {
+  color: var(--nope);
+}
+.act-label kbd {
   font-size: 10.5px;
   padding: 2px 5px;
 }
@@ -1051,18 +1089,258 @@ main:has(.voter) {
 .dialog-head form {
   margin: 0;
 }
-.keys {
+/* Help: the header button and the one help dialog (voter-help.tsx). */
+.button.ghost.help-button {
+  gap: 6px;
+  padding-inline: 6px 10px;
+  color: var(--text);
+}
+.help-mark {
   display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 10px 14px;
-  align-items: baseline;
-  margin: 0 0 14px;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--blue-light);
+  color: var(--blue);
+  font-weight: 760;
+  font-size: 12.5px;
 }
-.keys dt {
-  text-align: right;
+.help {
+  width: 620px;
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  display: none;
+  flex-direction: column;
 }
-.keys dd {
+.help[open] {
+  display: flex;
+}
+.help .dialog-head {
+  padding: 16px 20px 0;
+  margin-bottom: 4px;
+}
+.help .dialog-head h2 {
+  font-size: 19px;
+}
+.help-body {
+  overflow: auto;
+  min-height: 0;
+  padding: 4px 20px 12px;
+  overscroll-behavior: contain;
+}
+.help-intro {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.help-intro p {
   margin: 0;
+  color: var(--secondary);
+}
+.help-heading {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 14px 0 6px;
+}
+.legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+}
+.legend-row {
+  display: grid;
+  grid-template-columns: 36px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.legend-row:first-child {
+  border-top: 0;
+}
+.legend-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--secondary);
+  font-size: 17px;
+}
+.legend-icon.like {
+  background: var(--like-bg);
+  border-color: color-mix(in srgb, var(--like-solid) 45%, var(--border));
+}
+.legend-icon.nope {
+  background: var(--nope-bg);
+  border-color: color-mix(in srgb, var(--nope-solid) 45%, var(--border));
+}
+.legend-icon svg {
+  width: 18px;
+  height: 18px;
+}
+.legend-text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.legend-text .muted {
+  font-size: 13px;
+}
+.legend-how {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-self: end;
+  white-space: nowrap;
+}
+.legend-swipe {
+  font-size: 12px;
+  font-weight: 560;
+  color: var(--secondary);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.help-more {
+  margin: 8px 0 0;
+}
+.help-touch svg {
+  width: 14px;
+  height: 14px;
+  vertical-align: -2px;
+}
+.help-more kbd {
+  font-size: 10.5px;
+  padding: 2px 5px;
+}
+.help-rules {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--secondary);
+}
+.help-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0;
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--border);
+}
+/* The swipe demo: a small card that goes right, left and up in a loop. */
+.swipe-demo {
+  position: relative;
+  flex: none;
+  width: 112px;
+  height: 92px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.swipe-arrow {
+  position: absolute;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+.swipe-arrow.left {
+  left: 7px;
+  top: 50%;
+  translate: 0 -50%;
+  color: var(--nope);
+}
+.swipe-arrow.right {
+  right: 7px;
+  top: 50%;
+  translate: 0 -50%;
+  color: var(--like);
+}
+.swipe-arrow.up {
+  top: 5px;
+  left: 50%;
+  translate: -50% 0;
+  color: var(--muted);
+}
+.swipe-card {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 46px;
+  height: 56px;
+  margin: -24px 0 0 -23px;
+  border-radius: 7px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 12px #1d1a1418;
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  padding: 8px 7px;
+  animation: swipe-demo 6s var(--ease-out) infinite;
+}
+.swipe-line {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--track);
+}
+.swipe-line.short {
+  width: 60%;
+}
+.swipe-stamp {
+  position: absolute;
+  bottom: 6px;
+  left: 50%;
+  translate: -50% 0;
+  font-size: 15px;
+  opacity: 0;
+}
+.swipe-stamp.like {
+  animation: swipe-like 6s linear infinite;
+}
+.swipe-stamp.nope {
+  animation: swipe-nope 6s linear infinite;
+}
+@keyframes swipe-demo {
+  0%, 8% { transform: none; opacity: 1; }
+  20% { transform: translateX(30px) rotate(12deg); opacity: 1; }
+  26% { transform: translateX(30px) rotate(12deg); opacity: 0; }
+  30%, 40% { transform: none; opacity: 1; }
+  52% { transform: translateX(-30px) rotate(-12deg); opacity: 1; }
+  58% { transform: translateX(-30px) rotate(-12deg); opacity: 0; }
+  62%, 72% { transform: none; opacity: 1; }
+  84% { transform: translateY(-26px); opacity: 1; }
+  90% { transform: translateY(-26px); opacity: 0; }
+  94%, 100% { transform: none; opacity: 1; }
+}
+@keyframes swipe-like {
+  0%, 12% { opacity: 0; }
+  18%, 24% { opacity: 1; }
+  27%, 100% { opacity: 0; }
+}
+@keyframes swipe-nope {
+  0%, 44% { opacity: 0; }
+  50%, 56% { opacity: 1; }
+  59%, 100% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .swipe-card,
+  .swipe-stamp {
+    animation: none;
+  }
 }
 .lightbox {
   max-width: calc(100vw - 32px);
@@ -1247,9 +1525,16 @@ main:has(.voter) {
   justify-items: start;
 }
 
-/* Touch screens: no key hints. */
+/* Touch screens: no key hints – the label alone; swipes instead of keys in the help. */
 @media (hover: none) {
-  .act kbd {
+  .act-label kbd,
+  .legend-how kbd,
+  .help-keys {
+    display: none;
+  }
+}
+@media (hover: hover) {
+  .help-touch {
     display: none;
   }
 }
@@ -1342,15 +1627,71 @@ main:has(.voter) {
   .stamp.nope {
     right: 14px;
   }
+  /* Each button as wide as its label, the free space shared out evenly. */
+  .actions {
+    gap: 0;
+    justify-content: space-evenly;
+  }
+  .act-button {
+    flex: 0 1 auto;
+    min-width: 46px;
+    padding: 0;
+    gap: 4px;
+  }
   .act {
     width: 46px;
     height: 46px;
   }
-  .act.like,
-  .act.nope {
+  .act-button.like .act,
+  .act-button.nope .act {
     width: 62px;
     height: 62px;
     font-size: 26px;
+  }
+  .act-label {
+    font-size: 11px;
+    letter-spacing: -0.01em;
+  }
+  .act-label kbd {
+    display: none;
+  }
+  .button.ghost.help-button {
+    padding-inline: 5px 8px;
+  }
+  .help .dialog-head {
+    padding: 14px 16px 0;
+  }
+  .help-body {
+    padding: 4px 16px 10px;
+  }
+  .help-foot {
+    padding: 10px 16px 14px;
+  }
+  .help-foot .button {
+    flex: 1;
+  }
+  .help-intro {
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .help-intro p {
+    font-size: 14px;
+  }
+  .swipe-demo {
+    width: 88px;
+    height: 84px;
+  }
+  .legend-row {
+    grid-template-columns: 32px 1fr;
+    gap: 4px 10px;
+  }
+  .legend-icon {
+    width: 32px;
+    height: 32px;
+  }
+  .legend-how {
+    grid-column: 2;
+    justify-self: start;
   }
   .vote-item {
     gap: 10px;
@@ -1359,6 +1700,11 @@ main:has(.voter) {
   .thumb {
     width: 84px;
     height: 64px;
+  }
+}
+@media (max-width: 370px) {
+  .act-label {
+    font-size: 10.5px;
   }
 }
 @media (min-width: 601px) {

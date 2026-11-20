@@ -2,12 +2,14 @@
 // The voting screen: a stack of gallery screenshots, one at a time.
 // Swipe right 👍, left 👎, up to skip (pointer events: touch and mouse), or
 // use the buttons and keys (→ ← ↓, K comment, Z undo, Enter full image,
-// ? help). Votes go out at once through the queue (vote-queue.ts), which
+// ? help – voter-help.tsx, which also opens by itself on the first visit). Votes go out at once through the queue (vote-queue.ts), which
 // keeps them while offline. Every position is set through CSS custom
 // properties from script – never a style attribute (CSP).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useT } from "./i18n";
+import { CommentIcon, DeviceIcon, FilterIcon, SkipIcon, UndoIcon, ZoomIcon } from "./vote-icons";
+import { VoterHelp } from "./voter-help";
 import { VoteQueue, imageKey, type QueueState } from "./vote-queue";
 import { variantLabel, variantParts, verdictLabel } from "@/lib/labels";
 import { errorMessage } from "@/lib/notices";
@@ -418,8 +420,11 @@ export function Voter(props: Props) {
             <ProgressFill percent={percent} />
           </span>
         </div>
-        <button type="button" className="button small ghost icon-only" onClick={() => helpDialog.current?.showModal()} aria-label={t("Tastenkürzel (?)", "Keyboard shortcuts (?)")} title={t("Tastenkürzel (?)", "Keyboard shortcuts (?)")}>
-          ?
+        <button type="button" className="button small ghost help-button" onClick={() => helpDialog.current?.showModal()} aria-label={t("Hilfe (?)", "Help (?)")} title={t("So funktioniert's (?)", "How it works (?)")} aria-haspopup="dialog">
+          <span className="help-mark" aria-hidden="true">
+            ?
+          </span>
+          <span className="help-word">{t("Hilfe", "Help")}</span>
         </button>
       </div>
 
@@ -565,34 +570,30 @@ export function Voter(props: Props) {
       )}
 
       <div className="actions" role="group" aria-label={t("Bewertung", "Vote")}>
-        <button type="button" className="act undo" onClick={undo} disabled={!history.length} aria-label={t("Letzte Bewertung rückgängig (Z)", "Undo last vote (Z)")} title={t("Rückgängig (Z)", "Undo (Z)")}>
+        <ActButton kind="undo" onClick={undo} disabled={!history.length} name={t("Letzte Bewertung rückgängig (Z)", "Undo last vote (Z)")} title={t("Rückgängig (Z)", "Undo (Z)")} label={t("Rückgängig", "Undo")} keyCap="Z">
           <UndoIcon />
-          <kbd>Z</kbd>
-        </button>
-        <button type="button" className="act nope" onClick={() => vote("down")} disabled={!card || loading} aria-label={t("Gefällt mir nicht (Pfeil links)", "Dislike (left arrow)")} title={t("Gefällt mir nicht (←)", "Dislike (←)")}>
+        </ActButton>
+        <ActButton kind="nope" onClick={() => vote("down")} disabled={!card || loading} name={t("Gefällt nicht (Pfeil links)", "Don't like (left arrow)")} title={t("Gefällt nicht (←)", "Don't like (←)")} label={t("Gefällt nicht", "Don't like")} keyCap="←">
           <span aria-hidden="true">👎</span>
-          <kbd>←</kbd>
-        </button>
-        <button type="button" className="act skip" onClick={() => vote("skip")} disabled={!card || loading} aria-label={t("Überspringen (Pfeil runter)", "Skip (down arrow)")} title={t("Überspringen (↓)", "Skip (↓)")}>
+        </ActButton>
+        <ActButton kind="skip" onClick={() => vote("skip")} disabled={!card || loading} name={t("Überspringen (Pfeil runter)", "Skip (down arrow)")} title={t("Überspringen (↓)", "Skip (↓)")} label={t("Überspringen", "Skip")} keyCap="↓">
           <SkipIcon />
-          <kbd>↓</kbd>
-        </button>
-        <button type="button" className="act like" onClick={() => vote("up")} disabled={!card || loading} aria-label={t("Gefällt mir (Pfeil rechts)", "Like (right arrow)")} title={t("Gefällt mir (→)", "Like (→)")}>
+        </ActButton>
+        <ActButton kind="like" onClick={() => vote("up")} disabled={!card || loading} name={t("Gefällt mir (Pfeil rechts)", "Like (right arrow)")} title={t("Gefällt mir (→)", "Like (→)")} label={t("Gefällt mir", "Like")} keyCap="→">
           <span aria-hidden="true">👍</span>
-          <kbd>→</kbd>
-        </button>
-        <button
-          type="button"
-          className={`act comment${commentFor ? " active" : ""}`}
+        </ActButton>
+        <ActButton
+          kind={`comment${commentFor ? " active" : ""}`}
           onClick={() => (commentFor ? closeComment() : openComment(card ? "current" : "last"))}
           disabled={!card && !lastEntry}
-          aria-expanded={!!commentFor}
-          aria-label={t("Kommentar (K)", "Comment (K)")}
+          expanded={!!commentFor}
+          name={t("Kommentar (K)", "Comment (K)")}
           title={t("Kommentar (K)", "Comment (K)")}
+          label={t("Kommentar", "Comment")}
+          keyCap="K"
         >
           <CommentIcon />
-          <kbd>K</kbd>
-        </button>
+        </ActButton>
       </div>
 
       <div className="last-vote small" aria-hidden={!lastEntry}>
@@ -615,38 +616,7 @@ export function Voter(props: Props) {
         {announcement}
       </p>
 
-      <dialog ref={helpDialog} className="dialog help" aria-labelledby="help-title">
-        <div className="dialog-head">
-          <h2 id="help-title">{t("Tastenkürzel und Gesten", "Shortcuts and gestures")}</h2>
-          <form method="dialog">
-            <button className="button small ghost" aria-label={t("Schließen", "Close")}>
-              ✕
-            </button>
-          </form>
-        </div>
-        <dl className="keys">
-          <dt><kbd>→</kbd></dt>
-          <dd>👍 {t("Gefällt mir – oder nach rechts wischen", "Like – or swipe right")}</dd>
-          <dt><kbd>←</kbd></dt>
-          <dd>👎 {t("Gefällt mir nicht – oder nach links wischen", "Dislike – or swipe left")}</dd>
-          <dt><kbd>↓</kbd></dt>
-          <dd>{t("Überspringen – oder nach oben wischen", "Skip – or swipe up")}</dd>
-          <dt><kbd>K</kbd></dt>
-          <dd>{t("Kommentar schreiben; er wird mit der nächsten Bewertung gespeichert (Esc verlässt das Feld)", "Write a comment; it is saved with the next vote (Esc leaves the field)")}</dd>
-          <dt><kbd>Z</kbd></dt>
-          <dd>{t("Letzte Bewertung rückgängig", "Undo the last vote")}</dd>
-          <dt><kbd>Enter</kbd></dt>
-          <dd>{t("Ganzes Bild öffnen (auch Doppelklick)", "Open the full image (or double-click)")}</dd>
-          <dt><kbd>?</kbd></dt>
-          <dd>{t("Diese Hilfe", "This help")}</dd>
-        </dl>
-        <p className="muted small">
-          {t(
-            "Bewertet wird das Bild, nicht die Szene: Ändert sich ein Screenshot in einer neuen Galerie, kommt er wieder in deinen Stapel.",
-            "You vote on the image, not the scene: when a screenshot changes in a new gallery, it comes back into your deck.",
-          )}
-        </p>
-      </dialog>
+      <VoterHelp dialogRef={helpDialog} />
 
       <dialog ref={imageDialog} className="dialog lightbox" aria-label={card ? card.title : t("Bild", "Image")}>
         {card && (
@@ -715,48 +685,18 @@ function ProgressFill({ percent }: { percent: number }) {
   return <span className="progress-fill" ref={ref} />;
 }
 
-const Svg = ({ children, size = 20 }: { children: React.ReactNode; size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    {children}
-  </svg>
-);
-const UndoIcon = () => (
-  <Svg>
-    <path d="M9 14 4 9l5-5" />
-    <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
-  </Svg>
-);
-const SkipIcon = () => (
-  <Svg>
-    <path d="m6 15 6-6 6 6" />
-    <path d="m6 20 6-6 6 6" opacity=".45" />
-  </Svg>
-);
-const CommentIcon = () => (
-  <Svg>
-    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-  </Svg>
-);
-const ZoomIcon = () => (
-  <Svg size={18}>
-    <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
-  </Svg>
-);
-const FilterIcon = () => (
-  <Svg size={16}>
-    <path d="M3 5h18M6 12h12M10 19h4" />
-  </Svg>
-);
-function DeviceIcon({ device }: { device: string }) {
-  return device === "phone" ? (
-    <Svg size={14}>
-      <rect x="7" y="2" width="10" height="20" rx="2" />
-      <path d="M11 18h2" />
-    </Svg>
-  ) : (
-    <Svg size={14}>
-      <rect x="2" y="4" width="20" height="13" rx="2" />
-      <path d="M8 21h8M12 17v4" />
-    </Svg>
+// One action: the round button with its label and key cap under it – all one
+// button, so the label is part of the target. The accessible name keeps the key.
+function ActButton(props: { kind: string; onClick: () => void; disabled: boolean; expanded?: boolean; name: string; title: string; label: string; keyCap: string; children: React.ReactNode }) {
+  return (
+    <button type="button" className={`act-button ${props.kind}`} onClick={props.onClick} disabled={props.disabled} aria-expanded={props.expanded} aria-label={props.name} title={props.title}>
+      <span className="act" aria-hidden="true">
+        {props.children}
+      </span>
+      <span className="act-label" aria-hidden="true">
+        <span className="act-text">{props.label}</span>
+        <kbd>{props.keyCap}</kbd>
+      </span>
+    </button>
   );
 }

@@ -1,5 +1,6 @@
-// Smoke test in a real browser: vote with keys, buttons and a mouse swipe,
-// comment, undo, the full image and the help; "My votes"; the admin API with
+// Smoke test in a real browser: the guide on the first visit, the labelled
+// buttons; vote with keys, buttons and a mouse swipe, comment, undo, the full
+// image and the help (button and `?`); "My votes"; the admin API with
 // its token; no access for a login that is not on the list. No GitHub: the
 // session comes straight from the database.
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
@@ -32,23 +33,55 @@ test("vote with keys, buttons and a swipe; comment; undo; my votes; admin API", 
   const page = await context.newPage();
   const csp = watchCsp(page);
   await page.goto("/");
-  await expect(title(page)).toHaveText("Home");
+  // First visit: the guide opens by itself, focused on "Let's go".
+  const guide = page.getByRole("dialog", { name: "How it works" });
+  await expect(guide).toBeVisible();
+  await expect(guide.getByRole("heading", { name: "The buttons" })).toBeVisible();
+  await expect(guide.getByText("The maintainer sees your votes and comments together with your GitHub name.")).toBeVisible();
+  await expect(guide.getByRole("link", { name: "My votes" })).toBeVisible();
+  await expect(guide.getByRole("button", { name: "Let's go" })).toBeFocused();
+  await guide.getByRole("button", { name: "Let's go" }).click();
+  await expect(guide).toBeHidden();
+  // Not again after closing.
+  await page.reload();
+  await expect(page.locator(".vote-card.depth-0 img")).toHaveClass(/ready/);
+  await page.waitForTimeout(300);
+  await expect(guide).toBeHidden();
+  // Every button has a visible label and its key cap (desktop).
+  const actions = page.getByRole("group", { name: "Vote" });
+  for (const [name, label, key] of [["Undo last vote (Z)", "Undo", "Z"], ["Don't like (left arrow)", "Don't like", "←"], ["Skip (down arrow)", "Skip", "↓"], ["Like (right arrow)", "Like", "→"], ["Comment (K)", "Comment", "K"]]) {
+    const button = actions.getByRole("button", { name, exact: true });
+    await expect(button.locator(".act-text")).toHaveText(label);
+    await expect(button.locator(".act-text")).toBeVisible();
+    await expect(button.locator("kbd")).toHaveText(key);
+    await expect(button.locator("kbd")).toBeVisible();
+  }
+  // The help button opens the same dialog, now with "Back to voting".
+  await page.getByRole("button", { name: "Help (?)" }).click();
+  await expect(guide).toBeVisible();
+  await guide.getByRole("button", { name: "Back to voting" }).click();
+  await expect(guide).toBeHidden();
+  // The deck comes in a keyed random order (lib/votes.ts): no fixed first card.
   await expect(count(page)).toHaveText("1 / 12");
   await expect(page.locator(".vote-card.depth-0 img")).toHaveClass(/ready/);
-  await expect(page.locator(".vote-card.depth-0 .chip.variant")).toHaveText("Desktop · light");
+  const variant = page.locator(".vote-card.depth-0 .chip.variant");
+  await expect(variant).toHaveText(/^(Desktop|Phone) · (light|dark)$/);
+  const first = await title(page).innerText();
 
   // → like, ← dislike, ↓ skip.
   await page.keyboard.press("ArrowRight");
   await expect(count(page)).toHaveText("2 / 12");
-  await expect(page.getByRole("status").filter({ hasText: "Like: Home" })).toHaveCount(1);
+  await expect(page.getByRole("status").filter({ hasText: `Like: ${first}` })).toHaveCount(1);
   await page.keyboard.press("ArrowLeft");
   await expect(count(page)).toHaveText("3 / 12");
+  const third = { title: await title(page).innerText(), variant: await variant.innerText() };
   await page.keyboard.press("ArrowDown");
   await expect(count(page)).toHaveText("4 / 12");
   // Z undoes the skip.
   await page.keyboard.press("z");
   await expect(count(page)).toHaveText("3 / 12");
-  await expect(page.locator(".vote-card.depth-0 .chip.variant")).toHaveText("Phone · light");
+  await expect(title(page)).toHaveText(third.title);
+  await expect(variant).toHaveText(third.variant);
 
   // K: a comment, sent with the next verdict (the button).
   await page.keyboard.press("k");
@@ -57,7 +90,7 @@ test("vote with keys, buttons and a swipe; comment; undo; my votes; admin API", 
   await field.fill("The tab bar is cut off");
   await page.keyboard.press("Escape");
   await expect(field).toBeVisible();
-  await page.getByRole("button", { name: "Dislike (left arrow)" }).click();
+  await page.getByRole("button", { name: "Don't like (left arrow)" }).click();
   await expect(field).toHaveCount(0);
   await expect(count(page)).toHaveText("4 / 12");
 
@@ -89,8 +122,10 @@ test("vote with keys, buttons and a swipe; comment; undo; my votes; admin API", 
   await page.keyboard.press("Escape");
   await expect(page.locator("dialog.lightbox")).toBeHidden();
   await page.keyboard.press("?");
-  await expect(page.getByRole("heading", { name: "Shortcuts and gestures" })).toBeVisible();
+  await expect(guide).toBeVisible();
+  await expect(guide.getByRole("heading", { name: "How it works" })).toBeVisible();
   await page.keyboard.press("Escape");
+  await expect(guide).toBeHidden();
 
   // A comment after the verdict.
   await page.getByRole("button", { name: "Like (right arrow)" }).click();
@@ -147,6 +182,36 @@ test("vote with keys, buttons and a swipe; comment; undo; my votes; admin API", 
   expect(prompt.prompt).toContain("Design-Feedback aus flowplan-vote");
   const csv = await request.get("/api/admin/export?format=csv", { headers: { Authorization: `Bearer ${ADMIN_TOKEN}` } });
   expect(csv.headers()["content-type"]).toBe("text/csv; charset=utf-8");
+});
+
+test("on a phone: guide once, labels instead of key caps, no overflow", async ({ browser, baseURL }) => {
+  const { voter } = seed();
+  const context = await browser.newContext({ locale: "de-DE", viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  await signedIn(context, voter, baseURL!);
+  const page = await context.newPage();
+  const csp = watchCsp(page);
+  await page.goto("/");
+  const guide = page.getByRole("dialog", { name: "So funktioniert's" });
+  await expect(guide).toBeVisible();
+  await expect(guide.getByText("nach rechts wischen")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(guide).toBeHidden();
+  const actions = page.getByRole("group", { name: "Bewertung" });
+  for (const label of ["Rückgängig", "Gefällt nicht", "Überspringen", "Gefällt mir", "Kommentar"]) await expect(actions.locator(".act-text").getByText(label, { exact: true })).toBeVisible();
+  await expect(actions.locator("kbd").first()).toBeHidden();
+  // The labels fit: nothing wider than its button, no horizontal scroll.
+  const clipped = await actions.locator(".act-button").evaluateAll((buttons) => buttons.filter((b) => b.querySelector(".act-label")!.scrollWidth > b.clientWidth + 1).length);
+  expect(clipped).toBe(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
+  await page.reload();
+  await expect(page.locator(".vote-card.depth-0")).toBeVisible();
+  await page.waitForTimeout(300);
+  await expect(guide).toBeHidden();
+  await page.getByRole("button", { name: "Hilfe (?)" }).click();
+  await expect(guide).toBeVisible();
+  await expect(guide.getByRole("button", { name: "Weiter bewerten" })).toBeVisible();
+  expect(csp).toEqual([]);
+  await context.close();
 });
 
 test("a login that is not on the list sees no access", async ({ browser, baseURL }) => {

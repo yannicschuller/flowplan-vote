@@ -27,8 +27,9 @@ A vote sent just before a new gallery run still finds its image: the last three 
 
 - One screenshot, as large as the screen allows (desktop and phone), with title, scene id, group, variant (Desktop/Phone · light/dark) and the progress (`37 / 412`). The next two images are already loaded in the stack behind, one more is preloaded.
 - **Swipe** (pointer events – touch, pen and mouse): right 👍, left 👎, up skip. The card follows the finger, tilts, gets a green or red tint and a stamp; past the threshold (a quarter of the width, a fifth of the height, or a quick flick) it flies out, otherwise it springs back.
-- **Buttons** for undo, 👎, skip, 👍 and comment, with accessible names.
-- **Keys**: `→` 👍, `←` 👎, `↓` skip, `K` comment, `Z` undo, `Enter` full image (also double-click), `?` shortcuts. `Esc` leaves the comment field and keeps the text.
+- **Buttons** for undo, 👎, skip, 👍 and comment, each with a short label under it (and its key on devices with a mouse), with accessible names.
+- **Help**: "How it works" – what the gallery is, the legend of buttons, swipes and keys, and the rules (changed screens come back, the maintainer sees votes with the GitHub name, "My votes"). It opens by itself on the first visit (remembered in `localStorage`, else once per session) and any time from the "Help" button or `?`.
+- **Keys**: `→` 👍, `←` 👎, `↓` skip, `K` comment, `Z` undo, `Enter` full image (also double-click), `?` help. `Esc` leaves the comment field and keeps the text.
 - **Comment** before the verdict (sent with it) or after it ("Add a comment" under the buttons, saved at once).
 - **Undo** puts the last card back and restores what you had on that image before (up to 50 steps).
 - **Offline**: votes go out at once; when the network is gone they wait in a queue (memory and `localStorage`, per person) and are sent again when the browser is back online or every 20 seconds. One entry per image, so the last change wins.

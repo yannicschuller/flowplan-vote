@@ -1,6 +1,9 @@
 // Sign-in only with GitHub, through the GitHub App's user authorization
 // (OAuth). The user's token is used once to read GET /user and then
-// dropped. Only logins in VOTE_ALLOWED_LOGINS get an account and a session.
+// dropped. Who gets an account and a session: in list mode the logins in
+// VOTE_ALLOWED_LOGINS, in open mode (VOTE_ALLOWED_LOGINS=*) every GitHub
+// account at least VOTE_MIN_ACCOUNT_AGE_DAYS old; never a login in
+// VOTE_BLOCKED_LOGINS. Nothing is stored about anyone refused.
 // Sessions are random tokens in an httpOnly cookie; the database keeps only
 // their SHA-256.
 import { now, one, run } from "./db";
@@ -14,8 +17,9 @@ export const OAUTH_STATE_COOKIE = "fv_oauth";
 export const SESSION_DAYS = 30;
 
 export type User = { id: number; github_id: number; login: string; name: string; created_at: number };
-// `allowed` follows VOTE_ALLOWED_LOGINS on every request: a login taken off
-// the list loses access at once, even with a valid session.
+// `allowed` follows VOTE_ALLOWED_LOGINS and VOTE_BLOCKED_LOGINS on every
+// request: a login taken off the list (or blocked, or list mode switched
+// back on) loses access at once, even with a valid session.
 export type SessionUser = User & { allowed: boolean };
 
 export function upsertUser(profile: { id: number; login: string; name?: string | null }): User {
@@ -87,7 +91,18 @@ export function authorizeUrl(state: string) {
   return url.toString();
 }
 
-// Exchanges the code on the server and reads the user; the token is not kept.
+// Open mode only: is the GitHub account at least VOTE_MIN_ACCOUNT_AGE_DAYS
+// old? A missing or unreadable creation date counts as too young.
+export function accountOldEnough(accountCreatedAt: number | null, at = now()) {
+  if (!config.openVoting()) return true;
+  const days = config.minAccountAgeDays();
+  if (days <= 0) return true;
+  return accountCreatedAt !== null && at - accountCreatedAt >= days * 86_400_000;
+}
+
+// Exchanges the code on the server and reads the user (GET /user, which
+// also carries the account's created_at – no extra request, no extra
+// scope); the token is not kept.
 export async function githubProfile(code: string) {
   const oauth = config.oauth();
   if (!oauth) throw new HttpError(404, "github_off", "GitHub sign-in is not configured.");
@@ -101,8 +116,10 @@ export async function githubProfile(code: string) {
   const userResponse = await githubFetch(`${config.githubApi()}/user`, {
     headers: { Authorization: `Bearer ${tokenData.access_token}`, Accept: "application/vnd.github+json" },
   });
-  const profile = (await userResponse.json().catch(() => ({}))) as { id?: number; login?: string; name?: string | null };
+  const profile = (await userResponse.json().catch(() => ({}))) as { id?: number; login?: string; name?: string | null; created_at?: unknown };
   if (!userResponse.ok || typeof profile.id !== "number" || typeof profile.login !== "string" || !/^[A-Za-z0-9-]{1,39}$/.test(profile.login))
     throw new HttpError(400, "github_failed", "GitHub sign-in failed.");
-  return { id: profile.id, login: profile.login, name: profile.name ?? "" };
+  const created = typeof profile.created_at === "string" ? Date.parse(profile.created_at) : NaN;
+  // accountCreatedAt is only used for the age check and never stored.
+  return { id: profile.id, login: profile.login, name: profile.name ?? "", accountCreatedAt: Number.isFinite(created) ? created : null };
 }

@@ -1,13 +1,14 @@
 // The logic of every API endpoint, on plain Request and Response
 // (app/api/** only forwards here; tests call these directly). Writing
-// requests pass requireVoter() (Origin check + session of an allowed
-// login) first; the admin API is checked by its Bearer token (lib/admin.ts).
+// requests pass requireVoter() (Origin check + session of an allowed,
+// not blocked login) first; the admin API is checked by its Bearer token (lib/admin.ts).
 import { config, isAllowedLogin } from "./config";
 import { HttpError, clientIp, cookie, int, isForm, json, readInput, redirect, safeNext, setCookie } from "./http";
 import { RateLimitError, LIMITS, ipKey, limit } from "./rate-limit";
 import {
   OAUTH_STATE_COOKIE,
   SESSION_COOKIE,
+  accountOldEnough,
   authorizeUrl,
   clearSessionCookie,
   createSession,
@@ -54,8 +55,10 @@ export async function callbackRoute(request: Request) {
   try {
     limit(`signin:${ipKey(clientIp(request))}`, LIMITS.signIn);
     const profile = await githubProfile(code);
-    // Logins not on the list get no account and no session: nothing is stored about them.
+    // Refused logins (not on the list, blocked, account too young) get no
+    // account and no session: nothing is stored about them.
     if (!isAllowedLogin(profile.login)) return redirect(`/login?error=not_allowed&login=${encodeURIComponent(profile.login)}`, [clear]);
+    if (!accountOldEnough(profile.accountCreatedAt)) return redirect(`/login?error=account_too_new&login=${encodeURIComponent(profile.login)}`, [clear]);
     const user = upsertUser(profile);
     return redirect(next, [clear, sessionCookie(createSession(user.id))]);
   } catch (error) {
@@ -105,6 +108,7 @@ export async function deckRoute(request: Request) {
 
 const voteLimits = (userId: number) => {
   limit(`vote-min:${userId}`, LIMITS.voteMinute);
+  limit(`vote-hour:${userId}`, LIMITS.voteHour);
   limit(`vote-day:${userId}`, LIMITS.voteDay);
 };
 

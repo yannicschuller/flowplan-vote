@@ -47,12 +47,12 @@ test("without VOTE_ADMIN_TOKEN the admin API does not exist; a wrong token is 40
 test("summary: gallery, totals, by group", async () => {
   const s = await body(await admin("/api/admin/summary"));
   assert.deepEqual(s.gallery, { generated: "2026-11-19T02:00:00.000Z", commit: "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678", commitShort: "a1b2c3d", version: "1.42.0", shots: 12 });
-  assert.deepEqual(s.totals, { up: 1, down: 4, skip: 1, comments: 3, voters: 2 });
+  assert.deepEqual(s.totals, { up: 1, down: 4, skip: 1, comments: 3, voters: 2, downVoters: 2 });
   assert.equal(s.latestVoteAt, new Date(1700000006000).toISOString());
   assert.deepEqual(s.byGroup, [
-    { group: "Pages", up: 0, down: 3, skip: 0 },
-    { group: "Documents & editor", up: 1, down: 1, skip: 0 },
-    { group: "Settings", up: 0, down: 0, skip: 1 },
+    { group: "Pages", up: 0, down: 3, skip: 0, voters: 2, downVoters: 2 },
+    { group: "Documents & editor", up: 1, down: 1, skip: 0, voters: 2, downVoters: 1 },
+    { group: "Settings", up: 0, down: 0, skip: 1, voters: 1, downVoters: 0 },
   ]);
 });
 
@@ -78,7 +78,7 @@ test("votes: newest first, filters, cursor, current", async () => {
   assert.equal((await admin("/api/admin/votes?cursor=nope")).status, 400);
 });
 
-test("scenes: sorted by 👎, with history per gallery run", async () => {
+test("scenes: sorted by 👎, with voter counts and history per gallery run", async () => {
   const { scenes } = await body(await admin("/api/admin/scenes"));
   assert.deepEqual(scenes.map((s: { scene: string }) => s.scene), ["home", "document-editor", "settings-profile"]);
   const home = scenes[0];
@@ -89,6 +89,10 @@ test("scenes: sorted by 👎, with history per gallery run", async () => {
   assert.equal(home.lastVoteAt, new Date(1700000005000).toISOString());
   assert.equal(home.file, "shots/home--desktop-light.png", "the desktop-light image");
   assert.equal(home.thumb, "shots/home--desktop-light.png");
+  // Distinct people, not votes: Anna's two 👎 on home count once.
+  assert.deepEqual([home.voters, home.upVoters, home.downVoters, home.skipVoters], [2, 0, 2, 0]);
+  const editor = scenes[1];
+  assert.deepEqual([editor.voters, editor.upVoters, editor.downVoters, editor.skipVoters], [2, 1, 1, 0]);
   assert.deepEqual(home.history, [{ galleryGenerated: "2026-11-19T02:00:00.000Z", commitShort: "a1b2c3d", up: 0, down: 3 }]);
 });
 
@@ -97,7 +101,11 @@ test("prompt: the 👎 scenes with variants, links, comments and the closing ins
   const { prompt, scenes } = await body(await admin("/api/admin/prompt?includeUp=1"));
   assert.equal(scenes, 2);
   assert.match(prompt, /^# Design-Feedback aus flowplan-vote \(Galerie vom 19\. Nov\. 2026, Commit a1b2c3d\)/);
-  assert.match(prompt, /### Home\n\n- Szene: `home`\n- Gruppe: Pages\n- Varianten mit 👎: desktop-light, phone-dark\n- Stimmen: 2/);
+  assert.match(prompt, /### Home\n\n- Szene: `home`\n- Gruppe: Pages\n- Varianten mit 👎: desktop-light, phone-dark\n- 👎: 2 von 2 Bewertenden \(100 %\)/);
+  assert.match(prompt, /- Szene: `document-editor`[^#]*- 👎: 1 von 2 Bewertenden \(50 %\)/);
+  assert.ok(prompt.indexOf("- Szene: `home`") < prompt.indexOf("- Szene: `document-editor`"), "ranked by share of voters");
+  assert.ok(!/\b(anna|ben)\b/i.test(prompt), "no logins in the prompt");
+  assert.ok(prompt.includes("desktop-light:\n\n> Die Seitenleiste"), "comments with the variant only");
   assert.ok(prompt.includes(`  - desktop-light: ${mock.base}/shots/home--desktop-light.png`));
   assert.ok(prompt.includes("> Die Seitenleiste ist zu breit.\n> Und der Kopf zu hoch."), "comments verbatim, quoted line by line");
   assert.ok(prompt.includes("> Zu viel Weißraum"));
@@ -143,4 +151,24 @@ test("export: JSON and CSV (spreadsheet formulas defused)", async () => {
   assert.ok(csv.includes(`"'=HYPERLINK(""x"")"`));
   assert.ok(csv.includes('"Die Seitenleiste ist zu breit.\nUnd der Kopf zu hoch."'));
   assert.equal((await admin("/api/admin/export?format=xml")).status, 400);
+});
+
+test("prompt: 👎 scenes ranked by share of voters, not raw counts; open mode keeps logins out", async () => {
+  process.env.VOTE_ALLOWED_LOGINS = "*";
+  const carla = signIn("carla");
+  const dirk = signIn("dirk");
+  // home: 2 of 4 people 👎 (but 3 👎 votes); editor: 2 of 3 people 👎 (with Anna's 👍).
+  await cast(carla.cookie, { ...shot("home", "desktop-dark"), verdict: "up" });
+  await cast(dirk.cookie, { ...shot("home", "phone-light"), verdict: "up" });
+  await cast(carla.cookie, { ...shot("document-editor", "desktop-dark"), verdict: "down", comment: "Toolbar zu voll" });
+  const { prompt } = await body(await admin("/api/admin/prompt"));
+  assert.match(prompt, /- Szene: `home`[^#]*- 👎: 2 von 4 Bewertenden \(50 %\)/);
+  assert.match(prompt, /- Szene: `document-editor`[^#]*- 👎: 2 von 3 Bewertenden \(67 %\)/);
+  assert.ok(prompt.indexOf("- Szene: `document-editor`") < prompt.indexOf("- Szene: `home`"), "the higher share first");
+  assert.ok(!/\b(anna|ben|carla|dirk)\b/i.test(prompt), "no logins in the prompt");
+  const { scenes } = await body(await admin("/api/admin/scenes"));
+  const home = scenes.find((x: { scene: string }) => x.scene === "home");
+  assert.deepEqual([home.voters, home.upVoters, home.downVoters], [4, 2, 2]);
+  // The votes list still names the login (admin only).
+  assert.equal((await body(await admin("/api/admin/votes?limit=1"))).votes[0].login, "carla");
 });

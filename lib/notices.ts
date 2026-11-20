@@ -11,6 +11,8 @@ export function errorMessage(code: string, t: T): string {
       return t("Bitte melde dich an.", "Please sign in.");
     case "not_allowed":
       return t("Dieses GitHub-Konto darf hier nicht bewerten.", "This GitHub account can't vote here.");
+    case "account_too_new":
+      return t("Dein GitHub-Konto ist noch zu neu zum Bewerten.", "Your GitHub account is too new to vote yet.");
     case "github_off":
       return t("Die Anmeldung mit GitHub ist auf diesem Server nicht eingerichtet.", "Sign-in with GitHub is not set up on this server.");
     case "github_state":

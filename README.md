@@ -39,7 +39,12 @@ A vote sent just before a new gallery run still finds its image: the last three 
 
 ### Who can vote
 
-Only the GitHub logins in `VOTE_ALLOWED_LOGINS` (comma-separated, case-insensitive). Empty means nobody – the sign-in page says so. Everyone else sees "No access" after signing in, and **nothing is stored about them** (no account, no session). The list is checked on every request: a login taken off the list loses access at once.
+`VOTE_ALLOWED_LOGINS` has two modes:
+
+- **List mode** – GitHub logins, comma-separated, case-insensitive: only they can vote. Empty means nobody – the sign-in page says so.
+- **Open mode** – `VOTE_ALLOWED_LOGINS=*`: everyone who signs in with a GitHub account can vote. Against throwaway accounts, an account must be at least `VOTE_MIN_ACCOUNT_AGE_DAYS` old (default 30; `0` switches the check off). The age comes from `created_at` in the `GET /user` answer the sign-in reads anyway – no extra request, no extra scope – and is not stored. A younger account sees "Account too new" with the number of days.
+
+In both modes the logins in `VOTE_BLOCKED_LOGINS` (comma-separated, case-insensitive) can never vote, and every person is rate-limited (see [Privacy and security](#privacy-and-security)). Everyone refused sees "No access" (or "Account too new") after signing in, and **nothing is stored about them** (no account, no session). The list and the block list are checked on every request: a login taken off the list, a blocked login, or every non-listed login when open mode is switched off, loses access at once. The account age is checked at sign-in only (an account only gets older).
 
 ## Admin API
 
@@ -50,13 +55,13 @@ For flowplan-admin (server to server): every request needs `Authorization: Beare
 ```jsonc
 {
   "gallery": { "generated": "2026-11-19T02:00:00.000Z", "commit": "<sha>", "commitShort": "a1b2c3d", "version": "1.42.0", "shots": 412 }, // null when the gallery is unreachable
-  "totals": { "up": 120, "down": 31, "skip": 9, "comments": 22, "voters": 2 },
+  "totals": { "up": 120, "down": 31, "skip": 9, "comments": 22, "voters": 2, "downVoters": 2 },
   "latestVoteAt": "2026-11-19T06:40:00.000Z", // null without votes
-  "byGroup": [{ "group": "Pages", "up": 30, "down": 5, "skip": 1 }] // in the gallery's group order
+  "byGroup": [{ "group": "Pages", "up": 30, "down": 5, "skip": 1, "voters": 2, "downVoters": 1 }] // in the gallery's group order
 }
 ```
 
-Totals count all stored votes (all gallery runs).
+Totals count all stored votes (all gallery runs). `up`, `down`, `skip` count votes; `voters` counts distinct people with any vote, `downVoters` distinct people with at least one 👎 (in `totals` and per group).
 
 ### `GET /api/admin/votes?verdict=up|down|skip&group=&scene=&since=<ms>&limit=≤1000&cursor=`
 
@@ -76,13 +81,14 @@ Newest first (`createdAt`, then `id`). `limit` defaults to 100 (1 … 1000). `si
 ```jsonc
 {
   "scenes": [{ "scene": "home", "group": "Pages", "title": "Home", "up": 3, "down": 5, "skip": 0, "comments": 2,
+               "voters": 6, "upVoters": 2, "downVoters": 4, "skipVoters": 0,
                "lastVerdict": "down", "lastVoteAt": "2026-11-19T06:40:00.000Z", "current": true,
                "file": "shots/home--desktop-light.png", "thumb": "shots/home--desktop-light.png",
                "history": [{ "galleryGenerated": "2026-11-18T02:00:00.000Z", "commitShort": "9f8e7d6", "up": 1, "down": 3 }] }]
 }
 ```
 
-One entry per voted scene, sorted by 👎 (then latest vote). `group`, `title` and `lastVerdict` come from the newest vote; `current` means the newest vote is on an image the current gallery still shows. `file` and `thumb` (relative to `GALLERY_URL`) are the current gallery's `desktop-light` shot of the scene, else its first variant; both are left out when the scene is no longer in the gallery. `history` is the trend: 👍/👎 per gallery run, oldest first.
+One entry per voted scene, sorted by 👎 votes (then latest vote). `up`, `down`, `skip` count votes (one per person and image, so a person can add several per scene – one per variant); `voters` counts the distinct people with any vote on the scene, `upVoters`/`downVoters`/`skipVoters` those with at least one vote of that verdict (a person with 👍 on desktop and 👎 on phone is in both). `group`, `title` and `lastVerdict` come from the newest vote; `current` means the newest vote is on an image the current gallery still shows. `file` and `thumb` (relative to `GALLERY_URL`) are the current gallery's `desktop-light` shot of the scene, else its first variant; both are left out when the scene is no longer in the gallery. `history` is the trend: 👍/👎 per gallery run, oldest first.
 
 ### `GET /api/admin/prompt?scope=current|all&group=&includeUp=0|1`
 
@@ -90,7 +96,7 @@ One entry per voted scene, sorted by 👎 (then latest vote). `group`, `title` a
 { "prompt": "# Design-Feedback aus flowplan-vote (Galerie vom 19. Nov. 2026, Commit a1b2c3d)\n…", "scenes": 4 }
 ```
 
-A German Markdown instruction for Claude Code: per 👎 scene (in the gallery's order) the scene id, group, title, the variants voted down, the image links (`${GALLERY_URL}/<file>`), the comments of the 👎 votes verbatim as quotes with login and variant, and the number of voters. `scope=current` (default) only counts votes on the current images; `scope=all` every vote. `group` limits it to one group. `includeUp=1` adds the 👍 scenes without any 👎 as "Gefällt (nicht anfassen)". It ends with: "Bitte wie bei /design-review: Screenshots ansehen, Befunde mit Vorschlägen auflisten und mich fragen, was umgesetzt wird – nichts ändern vor meinem OK." `scenes` is the number of 👎 scenes.
+A German Markdown instruction for Claude Code: per 👎 scene the scene id, group, title, the variants voted down, the share of voters (`- 👎: 4 von 6 Bewertenden (67 %)` – distinct people with a 👎 out of the distinct people with a 👍 or 👎 on the scene, in scope), the image links (`${GALLERY_URL}/<file>`) and the comments of the 👎 votes verbatim as quotes with their variant. The 👎 scenes are ranked by that share, then by the number of 👎 voters, then in the gallery's order. The prompt contains **no logins or names** – only counts – since in open mode they are strangers' personal data (the `/votes` list and `/export` still carry `login`, for the admin only). `scope=current` (default) only counts votes on the current images; `scope=all` every vote. `group` limits it to one group. `includeUp=1` adds the 👍 scenes without any 👎 as "Gefällt (nicht anfassen)". It ends with: "Bitte wie bei /design-review: Screenshots ansehen, Befunde mit Vorschlägen auflisten und mich fragen, was umgesetzt wird – nichts ändern vor meinem OK." `scenes` is the number of 👎 scenes.
 
 ### `GET /api/admin/export?format=csv|json`
 
@@ -100,8 +106,8 @@ Every vote (fields as in `/votes`, newest first) as a download (`Content-Disposi
 
 - No tracking, no analytics, no external fonts, scripts or CDNs.
 - Cookies: the session (`fv_session`, httpOnly, SameSite=Lax, Secure under https, 30 days; the database keeps only its SHA-256; signing out deletes it); during sign-in a ten-minute `fv_oauth` cookie for the OAuth `state`; the language cookie `fv_lang` only after the visitor switches the language. `localStorage` holds unsent votes only while offline.
-- Sign-in reads `GET /user` once with the user's OAuth token; the token is not stored. Stored per allowed user: GitHub id, login and name.
-- IP addresses are never stored: sign-in and wrong admin tokens are rate-limited by a daily rotating HMAC of the address (`ipKey()`). Votes are limited per user (180 per minute, 5,000 per day), the deck to 120 loads per minute; over the limit the API answers 429. Request bodies are size-limited.
+- Sign-in reads `GET /user` once with the user's OAuth token; the token is not stored. Stored per allowed user: GitHub id, login and name (the account's `created_at` is only compared, never stored). Nothing is stored about refused sign-ins.
+- IP addresses are never stored: sign-in and wrong admin tokens are rate-limited by a daily rotating HMAC of the address (`ipKey()`). Votes (and changes, undos) are limited per user (180 per minute, 1,000 per hour, 5,000 per day), the deck to 120 loads per minute; over the limit the API answers 429. Request bodies are size-limited.
 - CSRF: every writing request must carry an `Origin` (or, without it, a `Referer`) equal to the origin of `VOTE_URL`, else 403; plus SameSite=Lax.
 - A strict Content Security Policy (`proxy.ts`): scripts only with the per-request nonce (`strict-dynamic`), styles only from the stylesheet, no inline scripts or style attributes, images only from this site and the gallery, no framing.
 
@@ -110,7 +116,9 @@ Every vote (fields as in `/votes`, newest first) as a download (`Content-Disposi
 | Variable | Required | Meaning |
 | --- | --- | --- |
 | `VOTE_URL` | yes | The public base URL, e.g. `https://vote.flowplan.org` (Secure cookies, OAuth callback, Origin check). |
-| `VOTE_ALLOWED_LOGINS` | yes | GitHub logins that may vote, comma-separated, case-insensitive. Empty = nobody. |
+| `VOTE_ALLOWED_LOGINS` | yes | Who may vote: GitHub logins, comma-separated, case-insensitive (list mode), or `*` for everyone with a GitHub account (open mode). Empty = nobody. |
+| `VOTE_BLOCKED_LOGINS` | – | Logins that may never vote, in either mode, comma-separated, case-insensitive. Takes effect at once, also for existing sessions. |
+| `VOTE_MIN_ACCOUNT_AGE_DAYS` | – | Open mode only: minimum age of a GitHub account in days to sign in (default `30`; `0` = no check). |
 | `VOTE_GITHUB_CLIENT_ID` | yes | The GitHub App's client id (sign-in). |
 | `VOTE_GITHUB_CLIENT_SECRET` | yes | The GitHub App's client secret. |
 | `VOTE_ADMIN_TOKEN` | for flowplan-admin | Bearer token of the admin API, at least 24 characters (`openssl rand -hex 32`). The same value goes into flowplan-admin. Unset: admin API off (404). |
@@ -130,7 +138,7 @@ Sign-in uses a GitHub App's **user authorization** only – the App needs no per
 2. **Callback URL**: `<VOTE_URL>/api/auth/callback` (e.g. `https://vote.flowplan.org/api/auth/callback`). "Request user authorization (OAuth) during installation" **off**; "Expire user authorization tokens" as you like (the token is used once).
 3. **Webhook**: **off** (uncheck "Active").
 4. **Permissions**: none (account permissions are not needed – `GET /user` works without).
-5. **Where can this GitHub App be installed?**: "Only on this account" is enough – people sign in without installing it.
+5. **Where can this GitHub App be installed?**: for open mode (`VOTE_ALLOWED_LOGINS=*`) choose **"Any account"** (public) – other people's GitHub accounts must be able to authorize the App; with no permissions and no installation that exposes nothing. "Only on this account" may be enough for list mode with only your own login.
 6. Create it, copy the **Client ID** (→ `VOTE_GITHUB_CLIENT_ID`) and generate a **client secret** (→ `VOTE_GITHUB_CLIENT_SECRET`). No private key, no App ID needed.
 
 ## Deploy (Coolify)

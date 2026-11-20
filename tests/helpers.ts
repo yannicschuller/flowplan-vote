@@ -16,7 +16,7 @@ export async function setup() {
   const dir = mkdtempSync(join(tmpdir(), "vote-test-"));
   process.env.VOTE_DATA_DIR = dir;
   process.env.VOTE_URL = BASE;
-  for (const name of ["VOTE_ALLOWED_LOGINS", "VOTE_GITHUB_API", "VOTE_GITHUB_CLIENT_ID", "VOTE_GITHUB_CLIENT_SECRET", "VOTE_ADMIN_TOKEN", "VOTE_TIME_ZONE"]) delete process.env[name];
+  for (const name of ["VOTE_ALLOWED_LOGINS", "VOTE_GITHUB_API", "VOTE_GITHUB_CLIENT_ID", "VOTE_GITHUB_CLIENT_SECRET", "VOTE_ADMIN_TOKEN", "VOTE_TIME_ZONE", "VOTE_BLOCKED_LOGINS", "VOTE_MIN_ACCOUNT_AGE_DAYS"]) delete process.env[name];
   forgetGallery();
   const gallery = await startGalleryMock();
   after(async () => {
@@ -29,7 +29,7 @@ export async function setup() {
 }
 
 let nextGithubId = 1000;
-// A session straight in the database (the login must be in VOTE_ALLOWED_LOGINS to vote).
+// A session straight in the database (the login must be allowed by VOTE_ALLOWED_LOGINS to vote).
 export function signIn(login: string) {
   const user = upsertUser({ id: nextGithubId++, login, name: login });
   const token = createSession(user.id);

@@ -25,6 +25,9 @@ export function hit(key: string, max: number, windowSeconds: number, at = Date.n
 // The limits (per signed-in user; sign-in and wrong admin tokens per hashed address).
 export const LIMITS = {
   voteMinute: [180, 60],
+  // A full pass through the gallery (~400 images) plus undos and comments
+  // fits in an hour; a script hammering the API does not.
+  voteHour: [1000, 3600],
   voteDay: [5000, 86_400],
   deckMinute: [120, 60],
   signIn: [30, 3600],

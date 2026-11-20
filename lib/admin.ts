@@ -12,6 +12,7 @@ import { formatDate } from "./i18n";
 
 type Row = {
   id: number;
+  user_id: number;
   login: string;
   scene: string;
   grp: string;
@@ -25,7 +26,7 @@ type Row = {
   comment: string;
   created_at: number;
 };
-const SELECT = `SELECT v.id,u.login,v.scene,v.grp,v.title,v.variant,v.hash,v.gallery_generated,v."commit",v.version,v.verdict,v.comment,v.created_at FROM votes v JOIN users u ON u.id=v.user_id`;
+const SELECT = `SELECT v.id,v.user_id,u.login,v.scene,v.grp,v.title,v.variant,v.hash,v.gallery_generated,v."commit",v.version,v.verdict,v.comment,v.created_at FROM votes v JOIN users u ON u.id=v.user_id`;
 
 export function requireAdmin(request: Request) {
   const token = config.adminToken();
@@ -71,19 +72,23 @@ const galleryInfo = (g: Gallery | null) =>
 // GET /api/admin/summary
 export async function adminSummary() {
   const g = await galleryOrNull();
-  const totals = one<{ up: number; down: number; skip: number; comments: number; voters: number; latest: number | null }>(
+  const totals = one<{ up: number; down: number; skip: number; comments: number; voters: number; downVoters: number; latest: number | null }>(
     `SELECT COALESCE(SUM(verdict='up'),0) AS up, COALESCE(SUM(verdict='down'),0) AS down, COALESCE(SUM(verdict='skip'),0) AS skip,
-            COALESCE(SUM(comment<>''),0) AS comments, COUNT(DISTINCT user_id) AS voters, MAX(created_at) AS latest FROM votes`,
+            COALESCE(SUM(comment<>''),0) AS comments, COUNT(DISTINCT user_id) AS voters,
+            COUNT(DISTINCT CASE WHEN verdict='down' THEN user_id END) AS downVoters, MAX(created_at) AS latest FROM votes`,
   )!;
-  const byGroup = all<{ group: string; up: number; down: number; skip: number }>(
-    `SELECT grp AS "group", SUM(verdict='up') AS up, SUM(verdict='down') AS down, SUM(verdict='skip') AS skip FROM votes GROUP BY grp`,
+  // voters / downVoters: distinct people (with any vote / with a 👎) in the group.
+  const byGroup = all<{ group: string; up: number; down: number; skip: number; voters: number; downVoters: number }>(
+    `SELECT grp AS "group", SUM(verdict='up') AS up, SUM(verdict='down') AS down, SUM(verdict='skip') AS skip,
+            COUNT(DISTINCT user_id) AS voters, COUNT(DISTINCT CASE WHEN verdict='down' THEN user_id END) AS downVoters
+     FROM votes GROUP BY grp`,
   );
   // In the gallery's group order, unknown groups after them.
   const order = new Map((g?.groups ?? []).map((name, i) => [name, i]));
   byGroup.sort((a, b) => (order.get(a.group) ?? 1e6) - (order.get(b.group) ?? 1e6) || a.group.localeCompare(b.group));
   return {
     gallery: galleryInfo(g),
-    totals: { up: totals.up, down: totals.down, skip: totals.skip, comments: totals.comments, voters: totals.voters },
+    totals: { up: totals.up, down: totals.down, skip: totals.skip, comments: totals.comments, voters: totals.voters, downVoters: totals.downVoters },
     latestVoteAt: iso(totals.latest ?? null),
     byGroup,
   };
@@ -154,16 +159,22 @@ export async function adminScenes() {
     lastVerdict: Verdict;
     lastVoteAt: number;
     current: boolean;
+    // Distinct people: with any vote, and per verdict (one person can be in
+    // both upVoters and downVoters, e.g. 👍 on desktop and 👎 on phone).
+    people: Set<number>;
+    byVerdict: Record<Verdict, Set<number>>;
     runs: Map<string, { galleryGenerated: string; commitShort: string; up: number; down: number }>;
   };
   const scenes = new Map<string, Scene>();
   for (const v of rows) {
     let s = scenes.get(v.scene);
     if (!s) {
-      s = { scene: v.scene, group: v.grp, title: v.title, up: 0, down: 0, skip: 0, comments: 0, lastVerdict: v.verdict, lastVoteAt: v.created_at, current: isCurrent(hashes, v), runs: new Map() };
+      s = { scene: v.scene, group: v.grp, title: v.title, up: 0, down: 0, skip: 0, comments: 0, lastVerdict: v.verdict, lastVoteAt: v.created_at, current: isCurrent(hashes, v), people: new Set(), byVerdict: { up: new Set(), down: new Set(), skip: new Set() }, runs: new Map() };
       scenes.set(v.scene, s);
     }
     s[v.verdict]++;
+    s.people.add(v.user_id);
+    s.byVerdict[v.verdict].add(v.user_id);
     if (v.comment) s.comments++;
     let r = s.runs.get(v.gallery_generated);
     if (!r) {
@@ -173,8 +184,12 @@ export async function adminScenes() {
     if (v.verdict === "up") r.up++;
     if (v.verdict === "down") r.down++;
   }
-  const list = [...scenes.values()].map(({ runs, lastVoteAt, ...s }) => ({
+  const list = [...scenes.values()].map(({ runs, lastVoteAt, people, byVerdict, ...s }) => ({
     ...s,
+    voters: people.size,
+    upVoters: byVerdict.up.size,
+    downVoters: byVerdict.down.size,
+    skipVoters: byVerdict.skip.size,
     lastVoteAt: iso(lastVoteAt),
     // Relative to GALLERY_URL; left out when the scene is no longer in the gallery.
     ...(images.get(s.scene) ?? {}),
@@ -196,7 +211,16 @@ export async function adminPrompt(params: URLSearchParams) {
   const files = new Map((g?.shots ?? []).map((x) => [shotKey(x), x.file]));
   const rows = all<Row>(`${SELECT} WHERE v.verdict IN ('up','down')${group ? " AND v.grp=?" : ""} ORDER BY v.created_at ASC, v.id ASC`, ...(group ? [group] : []));
   const inScope = rows.filter((v) => scope === "all" || isCurrent(hashes, v));
-  type Entry = { scene: string; group: string; title: string; variants: Set<string>; voters: Set<string>; comments: { login: string; variant: string; text: string }[] };
+  // No logins in the prompt (in open mode they are strangers' personal
+  // data): people are counted by user id, comments go in without a name.
+  type Entry = { scene: string; group: string; title: string; variants: Set<string>; voters: Set<number>; comments: { variant: string; text: string }[] };
+  // Everyone with a 👍 or 👎 on the scene (in scope): the base of the 👎 share.
+  const raters = new Map<string, Set<number>>();
+  for (const v of inScope) {
+    let set = raters.get(v.scene);
+    if (!set) raters.set(v.scene, (set = new Set()));
+    set.add(v.user_id);
+  }
   const collect = (verdict: Verdict) => {
     const map = new Map<string, Entry>();
     for (const v of inScope) {
@@ -209,8 +233,8 @@ export async function adminPrompt(params: URLSearchParams) {
       e.group = v.grp;
       e.title = v.title;
       e.variants.add(v.variant);
-      e.voters.add(v.login);
-      if (v.comment) e.comments.push({ login: v.login, variant: v.variant, text: v.comment });
+      e.voters.add(v.user_id);
+      if (v.comment) e.comments.push({ variant: v.variant, text: v.comment });
     }
     return map;
   };
@@ -238,18 +262,21 @@ export async function adminPrompt(params: URLSearchParams) {
       : "Alle Bewertungen, auch zu älteren Galerie-Bildern" + (group ? ` – Gruppe „${group}“` : "") + ` (${galleryUrl}).`,
     "",
   );
-  const downList = sorted(down);
+  // 👎 scenes by share of voters (4 of 6 before 5 of 20), then by the
+  // number of 👎 voters, then in the gallery's order.
+  const share = (e: Entry) => e.voters.size / Math.max(1, raters.get(e.scene)?.size ?? 0);
+  const downList = sorted(down).sort((a, b) => share(b) - share(a) || b.voters.size - a.voters.size);
   if (!downList.length) lines.push("Keine Szene mit 👎.", "");
   else {
-    lines.push(`## 👎 Gefällt nicht (${downList.length} ${downList.length === 1 ? "Szene" : "Szenen"})`, "");
+    lines.push(`## 👎 Gefällt nicht (${downList.length} ${downList.length === 1 ? "Szene" : "Szenen"}, nach Anteil der Bewertenden mit 👎)`, "");
     for (const e of downList) {
       lines.push(`### ${e.title || e.scene}`, "");
-      lines.push(`- Szene: \`${e.scene}\``, `- Gruppe: ${e.group}`, `- Varianten mit 👎: ${[...e.variants].join(", ")}`, `- Stimmen: ${e.voters.size}`);
+      lines.push(`- Szene: \`${e.scene}\``, `- Gruppe: ${e.group}`, `- Varianten mit 👎: ${[...e.variants].join(", ")}`, `- 👎: ${e.voters.size} von ${raters.get(e.scene)?.size ?? e.voters.size} Bewertenden (${Math.round(share(e) * 100)} %)`);
       lines.push(`- Bilder:`);
       for (const variant of e.variants) lines.push(`  - ${variant}: ${link(e.scene, variant)}`);
       if (e.comments.length) {
         lines.push("", "Kommentare:", "");
-        for (const c of e.comments) lines.push(`${c.login} (${c.variant}):`, "", quote(c.text), "");
+        for (const c of e.comments) lines.push(`${c.variant}:`, "", quote(c.text), "");
       } else lines.push("");
     }
   }

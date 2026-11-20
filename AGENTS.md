@@ -15,7 +15,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - The gallery (`GALLERY_URL`) is read-only: `manifest.json` is fetched on the server and cached (`lib/gallery.ts`); images are shown straight from the gallery's origin (the only external host in the CSP).
 - UI texts in German and English side by side: `t("Deutsch", "English")`, German informal "du". Code comments, README and commits in English.
 - No inline scripts or style attributes (strict CSP in `proxy.ts`): positions and sizes are set from script through CSS custom properties, never the `style` prop. Comments only as React text (never as HTML), no tracking, no visitor cookies except the session (and the language cookie after an explicit switch), never store IP addresses (use `ipKey()`).
-- Only logins in `VOTE_ALLOWED_LOGINS` get an account; nothing is stored about anyone else.
+- Who gets an account: in list mode only the logins in `VOTE_ALLOWED_LOGINS`; in open mode (`VOTE_ALLOWED_LOGINS=*`) every GitHub account at least `VOTE_MIN_ACCOUNT_AGE_DAYS` old; never a login in `VOTE_BLOCKED_LOGINS`. Nothing is stored about anyone refused, and per account only GitHub id, login and name. Logins never go into the prompt (`/api/admin/prompt`) – only counts.
 - Secrets only from environment variables – never in code, tests, fixtures or commits; tests use a local gallery mock (`tests/gallery-mock.ts`) and GitHub mock (`tests/github-mock.ts`), never the network.
 - Schema changes only as a new numbered migration in `lib/db.ts`.
 - Checks: `npm run typecheck`, `npm test`, `npm run build`; the browser smoke test is `npm run test:browser`.

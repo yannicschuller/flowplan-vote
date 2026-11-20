@@ -9,6 +9,16 @@ const text = (name: string) => (process.env[name] || "").trim();
 // the admin API switched off (with a log line).
 export const MIN_ADMIN_TOKEN = 24;
 let warnedShortToken = false;
+export const DEFAULT_MIN_ACCOUNT_AGE_DAYS = 30;
+let warnedAccountAge = false;
+
+const loginSet = (name: string) =>
+  new Set(
+    text(name)
+      .split(",")
+      .map((login) => login.trim().toLowerCase())
+      .filter(Boolean),
+  );
 
 export const config = {
   // Where the SQLite database and the generated key live (one volume).
@@ -18,15 +28,25 @@ export const config = {
   publicUrl: () => (text("VOTE_URL") || "http://localhost:3000").replace(/\/+$/, ""),
   publicOrigin: () => new URL(config.publicUrl()).origin,
   https: () => config.publicUrl().startsWith("https://"),
-  // Who may vote: GitHub logins, comma-separated, case-insensitive. Empty
+  // Who may vote: GitHub logins, comma-separated, case-insensitive (list
+  // mode), or "*" for everyone with a GitHub account (open mode). Empty
   // means nobody (the sign-in page says so).
-  allowedLogins: () =>
-    new Set(
-      text("VOTE_ALLOWED_LOGINS")
-        .split(",")
-        .map((login) => login.trim().toLowerCase())
-        .filter(Boolean),
-    ),
+  allowedLogins: () => loginSet("VOTE_ALLOWED_LOGINS"),
+  openVoting: () => config.allowedLogins().has("*"),
+  // Logins that may never vote, in either mode (comma-separated, case-insensitive).
+  blockedLogins: () => loginSet("VOTE_BLOCKED_LOGINS"),
+  // Open mode only: GitHub accounts younger than this many days can't sign
+  // in to vote (default 30; 0 switches the check off).
+  minAccountAgeDays: () => {
+    const value = text("VOTE_MIN_ACCOUNT_AGE_DAYS");
+    if (!value) return DEFAULT_MIN_ACCOUNT_AGE_DAYS;
+    if (!/^\d{1,5}$/.test(value)) {
+      if (!warnedAccountAge) console.error(`VOTE_MIN_ACCOUNT_AGE_DAYS "${value}" is not a number of days – using ${DEFAULT_MIN_ACCOUNT_AGE_DAYS}.`);
+      warnedAccountAge = true;
+      return DEFAULT_MIN_ACCOUNT_AGE_DAYS;
+    }
+    return Number(value);
+  },
   // The nightly UI gallery (manifest.json and the images).
   galleryUrl: () => (text("GALLERY_URL") || "https://gallery.flowplan.org").replace(/\/+$/, ""),
   galleryOrigin: () => {
@@ -76,4 +96,13 @@ export function validTimeZone(value: string): string {
   return zone;
 }
 
-export const isAllowedLogin = (login: string | null | undefined) => !!login && config.allowedLogins().has(login.toLowerCase());
+// Checked at sign-in and on every request: not blocked, and either open
+// mode or on the list. (The account age is checked at sign-in only – an
+// account only gets older.)
+export function isAllowedLogin(login: string | null | undefined) {
+  if (!login) return false;
+  const key = login.toLowerCase();
+  if (config.blockedLogins().has(key)) return false;
+  const allowed = config.allowedLogins();
+  return allowed.has("*") || allowed.has(key);
+}

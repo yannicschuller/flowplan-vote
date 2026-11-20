@@ -20,7 +20,9 @@ export default async function Login({ searchParams }: { searchParams: Promise<Re
   const error = typeof sp.error === "string" ? sp.error : "";
   const login = typeof sp.login === "string" && /^[A-Za-z0-9-]{1,39}$/.test(sp.login) ? sp.login : "";
   const enabled = !!config.oauth();
+  const open = config.openVoting();
   const nobody = config.allowedLogins().size === 0;
+  const minDays = config.minAccountAgeDays();
   return (
     <div className="signin card">
       <BrandMark size={44} />
@@ -34,17 +36,39 @@ export default async function Login({ searchParams }: { searchParams: Promise<Re
       {error === "not_allowed" ? (
         <div className="notice err" role="alert">
           <strong>{t("Kein Zugang", "No access")}</strong>
+          {open ? (
+            <p>
+              {login
+                ? t(`Das GitHub-Konto „${login}“ kann hier nicht bewerten.`, `The GitHub account “${login}” can't vote here.`)
+                : errorMessage("not_allowed", t)}
+            </p>
+          ) : (
+            <p>
+              {login
+                ? t(`Das GitHub-Konto „${login}“ ist hier nicht freigeschaltet.`, `The GitHub account “${login}” is not enabled here.`)
+                : errorMessage("not_allowed", t)}{" "}
+              {t("Frag Yannic, wenn du mitbewerten möchtest.", "Ask Yannic if you'd like to vote too.")}
+            </p>
+          )}
+        </div>
+      ) : error === "account_too_new" ? (
+        <div className="notice err" role="alert">
+          <strong>{t("Konto noch zu neu", "Account too new")}</strong>
           <p>
-            {login
-              ? t(`Das GitHub-Konto „${login}“ ist hier nicht freigeschaltet.`, `The GitHub account “${login}” is not enabled here.`)
-              : errorMessage("not_allowed", t)}{" "}
-            {t("Frag Yannic, wenn du mitbewerten möchtest.", "Ask Yannic if you'd like to vote too.")}
+            {t(
+              `Damit hier keine Wegwerf-Konten abstimmen, kann ein GitHub-Konto erst ${minDays} Tage nach seiner Erstellung bewerten${login ? ` – „${login}“ ist jünger` : ""}. Schau dann gern wieder vorbei!`,
+              `To keep throwaway accounts out, a GitHub account can vote once it is ${minDays} days old${login ? ` – “${login}” is younger` : ""}. Come back then!`,
+            )}
           </p>
         </div>
       ) : user && !user.allowed ? (
         <div className="notice err" role="alert">
           <strong>{t("Kein Zugang", "No access")}</strong>
-          <p>{t(`Das GitHub-Konto „${user.login}“ ist hier nicht (mehr) freigeschaltet.`, `The GitHub account “${user.login}” is not (or no longer) enabled here.`)}</p>
+          <p>
+            {open
+              ? t(`Das GitHub-Konto „${user.login}“ kann hier nicht (mehr) bewerten.`, `The GitHub account “${user.login}” can't (or can no longer) vote here.`)
+              : t(`Das GitHub-Konto „${user.login}“ ist hier nicht (mehr) freigeschaltet.`, `The GitHub account “${user.login}” is not (or no longer) enabled here.`)}
+          </p>
         </div>
       ) : (
         error && <p className="notice err" role="alert">{errorMessage(error, t)}</p>
@@ -66,10 +90,15 @@ export default async function Login({ searchParams }: { searchParams: Promise<Re
         <p className="notice warn">{errorMessage("github_off", t)}</p>
       )}
       <p className="muted small">
-        {t(
-          "Nur freigeschaltete GitHub-Konten können bewerten. Wir lesen nur Login und Namen; ein Cookie hält dich 30 Tage angemeldet. Keine Tracker.",
-          "Only enabled GitHub accounts can vote. We only read your login and name; a cookie keeps you signed in for 30 days. No trackers.",
-        )}
+        {open
+          ? t(
+              `Jedes GitHub-Konto kann bewerten${minDays > 0 ? `, das mindestens ${minDays} Tage alt ist` : ""}. Wir speichern nur Login und Namen; ein Cookie hält dich 30 Tage angemeldet. Keine Tracker.`,
+              `Every GitHub account can vote${minDays > 0 ? ` that is at least ${minDays} days old` : ""}. We only store your login and name; a cookie keeps you signed in for 30 days. No trackers.`,
+            )
+          : t(
+              "Nur freigeschaltete GitHub-Konten können bewerten. Wir lesen nur Login und Namen; ein Cookie hält dich 30 Tage angemeldet. Keine Tracker.",
+              "Only enabled GitHub accounts can vote. We only read your login and name; a cookie keeps you signed in for 30 days. No trackers.",
+            )}
       </p>
     </div>
   );

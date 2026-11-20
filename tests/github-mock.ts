@@ -5,7 +5,11 @@ import { after } from "node:test";
 
 export async function startGitHubMock() {
   const calls: { method: string; path: string; body?: unknown }[] = [];
-  const oauth = { code: "good-code", user: { id: 4242, login: "Octo-Voter", name: "Octo" } as { id: number; login: string; name: string } };
+  // GET /user's answer; tests swap it (other login, younger account).
+  const oauth = {
+    code: "good-code",
+    user: { id: 4242, login: "Octo-Voter", name: "Octo", created_at: "2015-03-01T10:00:00Z" } as { id: number; login: string; name: string; created_at?: string },
+  };
   const read = (req: IncomingMessage) =>
     new Promise<string>((resolve) => {
       const chunks: Buffer[] = [];

@@ -20,7 +20,7 @@ test("health answers with the service name", async () => {
   assert.deepEqual(await body(await call(() => healthRoute())), { service: "flowplan-vote", status: "ok" });
 });
 
-test("sign-in: only allowed logins get an account and a session", async () => {
+test("list mode: only allowed logins get an account and a session", async () => {
   allow("someone-else");
   const start = await call(() => loginRoute(req("/api/auth/login?next=/mine")));
   assert.equal(start.status, 303);
@@ -54,6 +54,75 @@ test("sign-in: only allowed logins get an account and a session", async () => {
   const out = await call(() => logoutRoute(req("/api/auth/logout", { method: "POST", form: {}, cookie: `fv_session=${token}` })));
   assert.equal(out.status, 303);
   assert.equal(userForSessionToken(token), null);
+});
+
+// One OAuth round trip with the mock: start, then the callback with the given code.
+async function signInViaGitHub(code = "good-code") {
+  const start = await call(() => loginRoute(req("/api/auth/login")));
+  const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
+  const stateCookie = start.headers.get("set-cookie")!.split(";")[0];
+  return call(() => callbackRoute(req(`/api/auth/callback?code=${code}&state=${state}`, { cookie: stateCookie })));
+}
+const sessionTokenOf = (r: Response) => {
+  const c = r.headers.getSetCookie().find((x) => x.startsWith("fv_session="));
+  return c ? decodeURIComponent(c.split(";")[0].slice("fv_session=".length)) : null;
+};
+const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+
+test("open mode (*): any GitHub login gets an account and may vote", async () => {
+  process.env.VOTE_ALLOWED_LOGINS = "*";
+  github.oauth.user = { id: 5001, login: "Stranger-1", name: "Stranger", created_at: daysAgo(400) };
+  const ok = await signInViaGitHub();
+  assert.equal(ok.headers.get("location"), "/");
+  const token = sessionTokenOf(ok)!;
+  assert.equal(userForSessionToken(token)!.allowed, true);
+  assert.equal((await cast(`fv_session=${token}`, { ...homeDesktop, verdict: "up" })).status, 200);
+  // Only GitHub id, login and name are stored – not the account's age.
+  const row = one<Record<string, unknown>>("SELECT * FROM users WHERE github_id=5001")!;
+  assert.deepEqual(Object.keys(row).sort(), ["created_at", "github_id", "id", "last_login_at", "login", "name"]);
+  // Back to list mode: the session no longer votes.
+  allow("someone-else");
+  assert.equal((await cast(`fv_session=${token}`, { ...homeDesktop, verdict: "up" })).status, 403);
+});
+
+test("open mode: an account younger than VOTE_MIN_ACCOUNT_AGE_DAYS is refused", async () => {
+  process.env.VOTE_ALLOWED_LOGINS = "*";
+  github.oauth.user = { id: 5002, login: "Fresh-Account", name: "", created_at: daysAgo(3) };
+  const young = await signInViaGitHub();
+  assert.equal(young.headers.get("location"), "/login?error=account_too_new&login=Fresh-Account");
+  assert.equal(sessionTokenOf(young), null);
+  assert.equal(one("SELECT 1 AS x FROM users WHERE github_id=5002"), undefined, "nothing stored about a refused account");
+  // Default is 30 days; a custom value and 0 (off) are honoured.
+  github.oauth.user = { id: 5002, login: "Fresh-Account", name: "", created_at: daysAgo(10) };
+  assert.equal((await signInViaGitHub()).headers.get("location"), "/login?error=account_too_new&login=Fresh-Account");
+  process.env.VOTE_MIN_ACCOUNT_AGE_DAYS = "7";
+  assert.equal((await signInViaGitHub()).headers.get("location"), "/");
+  github.oauth.user = { id: 5003, login: "Brand-New", name: "" };
+  process.env.VOTE_MIN_ACCOUNT_AGE_DAYS = "1";
+  assert.equal((await signInViaGitHub()).headers.get("location"), "/login?error=account_too_new&login=Brand-New", "no created_at counts as too young");
+  process.env.VOTE_MIN_ACCOUNT_AGE_DAYS = "0";
+  assert.equal((await signInViaGitHub()).headers.get("location"), "/");
+  // List mode ignores the account age.
+  delete process.env.VOTE_MIN_ACCOUNT_AGE_DAYS;
+  github.oauth.user = { id: 5004, login: "Listed-Young", name: "", created_at: daysAgo(1) };
+  allow("listed-young");
+  assert.equal((await signInViaGitHub()).headers.get("location"), "/");
+});
+
+test("VOTE_BLOCKED_LOGINS refuses a login in open and list mode, also with a session", async () => {
+  process.env.VOTE_ALLOWED_LOGINS = "*";
+  github.oauth.user = { id: 5005, login: "Troll", name: "", created_at: daysAgo(900) };
+  const ok = await signInViaGitHub();
+  const token = sessionTokenOf(ok)!;
+  process.env.VOTE_BLOCKED_LOGINS = "someone, troll";
+  assert.equal((await signInViaGitHub()).headers.get("location"), "/login?error=not_allowed&login=Troll");
+  const r = await cast(`fv_session=${token}`, { ...homeDesktop, verdict: "down" });
+  assert.equal(r.status, 403, "blocked at once, even with a valid session");
+  assert.equal((await body(r)).error, "not_allowed");
+  allow("troll");
+  assert.equal((await signInViaGitHub()).headers.get("location"), "/login?error=not_allowed&login=Troll", "blocking wins over the list");
+  delete process.env.VOTE_BLOCKED_LOGINS;
+  github.oauth.user = { id: 4242, login: "Octo-Voter", name: "Octo", created_at: "2015-03-01T10:00:00Z" };
 });
 
 test("without client id and secret the sign-in is off", async () => {

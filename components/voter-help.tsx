@@ -138,6 +138,12 @@ export function VoterHelp({ dialogRef }: { dialogRef: RefObject<HTMLDialogElemen
             )}
           </li>
           <li>
+            {t(
+              "Der Maintainer kann eine Bewertung zurücksetzen: Sie zählt dann nicht mehr, und das Bild kommt wieder in deinen Stapel – markiert mit „Deine frühere Stimme wurde zurückgesetzt“.",
+              "The maintainer can reset a vote: it no longer counts and the image comes back into your deck – marked “Your earlier vote was reset”.",
+            )}
+          </li>
+          <li>
             {t("Unter ", "Under ")}
             <Link href="/mine">{t("Meine Bewertungen", "My votes")}</Link>
             {t(

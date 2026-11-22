@@ -10,7 +10,7 @@ import { run } from "../lib/db";
 const { gallery: mock } = await setup();
 const admin = (path: string, token: string | null = ADMIN_TOKEN) => {
   const url = new URL(path, "http://x");
-  const name = url.pathname.split("/").pop()!;
+  const name = url.pathname.replace(/^\/api\/admin\//, "");
   return handle(() => adminRoute(req(path, { headers: token ? { authorization: `Bearer ${token}` } : {} }), name));
 };
 const cast = (cookie: string, json: Record<string, unknown>) => handle(() => votesRoute(req("/api/votes", { method: "POST", json, cookie })));
@@ -60,7 +60,7 @@ test("votes: newest first, filters, cursor, current", async () => {
   const all = await body(await admin("/api/admin/votes"));
   assert.equal(all.votes.length, 6);
   assert.equal(all.nextCursor, null);
-  assert.deepEqual(Object.keys(all.votes[0]).sort(), ["commit", "comment", "createdAt", "current", "galleryGenerated", "group", "hash", "id", "login", "scene", "title", "variant", "verdict", "version"].sort());
+  assert.deepEqual(Object.keys(all.votes[0]).sort(), ["commit", "comment", "createdAt", "current", "dismissed", "dismissedAt", "dismissedBy", "galleryGenerated", "group", "hash", "id", "login", "scene", "title", "userId", "variant", "verdict", "version"].sort());
   assert.equal(all.votes[0].login, "ben");
   assert.equal(all.votes[0].current, true);
   assert.equal(all.votes[0].createdAt, new Date(1700000006000).toISOString(), "times as ISO strings");

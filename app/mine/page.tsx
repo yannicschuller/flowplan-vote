@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { pageT, pageUser } from "@/lib/page";
 import { galleryOrNull } from "@/lib/gallery";
-import { myVotes } from "@/lib/votes";
+import { myVotes, resetCount } from "@/lib/votes";
 import { config } from "@/lib/config";
 import { MyVotes } from "@/components/my-votes";
 
@@ -18,6 +18,7 @@ export default async function Mine() {
   if (!user.allowed) redirect("/login?error=not_allowed");
   const g = await galleryOrNull();
   const votes = myVotes(user, g);
+  const reset = resetCount(user);
   const groups = [...new Set([...(g?.groups ?? []), ...votes.map((v) => v.group)])].filter((x) => votes.some((v) => v.group === x));
   const variants = [...new Set([...(g?.variants ?? []), ...votes.map((v) => v.variant)])].filter((x) => votes.some((v) => v.variant === x));
   return (
@@ -30,6 +31,13 @@ export default async function Mine() {
             "Everything you voted on – newest first. Change the verdict, add a comment or delete a vote; deleted images come back into your deck.",
           )}
         </p>
+        {reset > 0 && (
+          <p className="notice reset-note">
+            {reset === 1
+              ? t("Eine deiner Bewertungen wurde vom Maintainer zurückgesetzt – das Bild ist wieder in deinem Stapel.", "One of your votes was reset by the maintainer – the image is back in your deck.")
+              : t(`${reset} deiner Bewertungen wurden vom Maintainer zurückgesetzt – die Bilder sind wieder in deinem Stapel.`, `${reset} of your votes were reset by the maintainer – the images are back in your deck.`)}
+          </p>
+        )}
         {!g && <p className="notice warn">{t("Die Galerie ist gerade nicht erreichbar – Vorschaubilder fehlen.", "The gallery is not reachable right now – previews are missing.")}</p>}
       </div>
       <MyVotes votes={votes} groups={groups} variants={variants} timeZone={config.timeZone()} />

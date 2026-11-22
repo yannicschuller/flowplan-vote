@@ -23,6 +23,8 @@ The **deck** (what you get to see) is every shot of the current gallery on whose
 
 A vote sent just before a new gallery run still finds its image: the last three runs seen are kept in memory.
 
+**Reset by the maintainer**: flowplan-admin can dismiss a vote (or all of a person's votes) through the [admin API](#admin-api). A dismissed vote counts nowhere – not in the summary, the scenes, the prompt or the export – and the deck treats its image as unvoted, so it comes back, marked "Your earlier vote was reset". Voting it again makes it a normal vote (the same row, the dismissal cleared). The maintainer can restore a dismissed vote; it then counts again and the image leaves the deck.
+
 ### Voting screen
 
 - One screenshot, as large as the screen allows (desktop and phone), with title, scene id, group, variant (Desktop/Phone · light/dark) and the progress (`37 / 412`). The next two images are already loaded in the stack behind, one more is preloaded.
@@ -36,7 +38,7 @@ A vote sent just before a new gallery run still finds its image: the last three 
 - The verdict is announced to screen readers (`role="status"`); focus states are visible; with `prefers-reduced-motion` the cards don't move.
 - Empty deck: "Alles bewertet – die nächste Galerie kommt heute Nacht".
 
-**My votes** (`/mine`): every own vote, newest first, filterable by verdict, comment, group, variant and text; change the verdict, edit the comment, delete (two steps – the image then comes back into the deck).
+**My votes** (`/mine`): every own vote, newest first, filterable by verdict, comment, group, variant and text; change the verdict, edit the comment, delete (two steps – the image then comes back into the deck). Votes reset by the maintainer are not listed (they count nowhere); a note says how many there are and that their images are back in the deck.
 
 ### Who can vote
 
@@ -49,7 +51,9 @@ In both modes the logins in `VOTE_BLOCKED_LOGINS` (comma-separated, case-insensi
 
 ## Admin API
 
-For flowplan-admin (server to server): every request needs `Authorization: Bearer <VOTE_ADMIN_TOKEN>`, compared in constant time. Without a token configured (or with one shorter than 24 characters) every path answers **404**; a missing or wrong token answers **401** (rate-limited per hashed address). JSON, no CORS headers, `Cache-Control: no-store`. Times in answers are ISO 8601 strings (`createdAt`, `lastVoteAt`, `latestVoteAt`, `galleryGenerated`); the `since` parameter is milliseconds since 1970.
+For flowplan-admin (server to server): every request needs `Authorization: Bearer <VOTE_ADMIN_TOKEN>`, compared in constant time. Without a token configured (or with one shorter than 24 characters) every path answers **404**; a missing or wrong token answers **401** (rate-limited per hashed address). JSON, no CORS headers, `Cache-Control: no-store`. Times in answers are ISO 8601 strings (`createdAt`, `lastVoteAt`, `latestVoteAt`, `galleryGenerated`, `dismissedAt`); the `since` parameter is milliseconds since 1970. The reads are `GET` (another method answers 405); the dismiss and restore actions are `POST` with a JSON body (at most 4 KB). Errors are `{ "error": "<code>", "message": "…" }`.
+
+**Dismissed votes** (reset by the maintainer, see [Votes and the deck](#votes-and-the-deck)) count nowhere: `/summary`, `/scenes`, `/prompt` and `/export` leave them out, and so does `/votes` unless asked with `dismissed=include|only`.
 
 ### `GET /api/admin/summary`
 
@@ -64,18 +68,53 @@ For flowplan-admin (server to server): every request needs `Authorization: Beare
 
 Totals count all stored votes (all gallery runs). `up`, `down`, `skip` count votes; `voters` counts distinct people with any vote, `downVoters` distinct people with at least one 👎 (in `totals` and per group).
 
-### `GET /api/admin/votes?verdict=up|down|skip&group=&scene=&since=<ms>&limit=≤1000&cursor=`
+### `GET /api/admin/votes?verdict=up|down|skip&group=&scene=&user=&dismissed=exclude|include|only&since=<ms>&limit=≤1000&cursor=`
 
 ```jsonc
 {
-  "votes": [{ "id": 7, "login": "yannicschuller", "scene": "home", "group": "Pages", "title": "Home", "variant": "phone-dark",
+  "votes": [{ "id": 7, "userId": 3, "login": "yannicschuller", "scene": "home", "group": "Pages", "title": "Home", "variant": "phone-dark",
               "hash": "…", "galleryGenerated": "…", "commit": "<sha>", "version": "1.42.0", "verdict": "down",
-              "comment": "Tab bar cut off", "createdAt": "2026-11-19T06:40:00.000Z", "current": true }],
+              "comment": "Tab bar cut off", "createdAt": "2026-11-19T06:40:00.000Z", "current": true,
+              "dismissed": false, "dismissedAt": null, "dismissedBy": null }],
   "nextCursor": "1763534400000.7" // opaque; null on the last page
 }
 ```
 
 Newest first (`createdAt`, then `id`). `limit` defaults to 100 (1 … 1000). `since` keeps votes with `createdAt >= since`. `current`: the vote's `hash` equals the current gallery's hash for its scene and variant. Pass `nextCursor` as `cursor` for the next page. A changed vote (new verdict or comment) gets a new `createdAt`.
+
+`user` keeps one person's votes: a login (case-insensitive) or, when no login matches and the value is all digits, the account id (`userId`); an unknown person answers **404** `unknown_user`. `dismissed`: `exclude` (default) leaves dismissed votes out, `include` lists them too, `only` lists only them. `userId` is this service's account id (not the GitHub id). `dismissed`, `dismissedAt` (ISO) and `dismissedBy` (the admin as flowplan-admin named them) describe a reset; `null` while the vote counts.
+
+### `GET /api/admin/voters`
+
+```jsonc
+{
+  "voters": [{ "userId": 3, "login": "yannicschuller", "name": "Yannic", "votes": 412, "up": 300, "down": 90, "skip": 22,
+               "comments": 40, "dismissed": 2, "lastVoteAt": "2026-11-19T06:40:00.000Z" }]
+}
+```
+
+Everyone with at least one vote (also with only dismissed ones), most votes first, then by login – for flowplan-admin's person filter. `votes`, `up`, `down`, `skip`, `comments` and `lastVoteAt` count only votes that count; `dismissed` counts the dismissed ones (`lastVoteAt` is `null` when there are none that count). For the admin only: logins and names never go into the prompt.
+
+### `POST /api/admin/votes/<id>/dismiss` · `POST /api/admin/votes/<id>/restore`
+
+```jsonc
+// dismiss: body { "by": "maintainer@example.org" } – who dismisses, required, one line, at most 200 characters
+// restore: body {} (nothing needed)
+{ "vote": { /* as in /votes */ }, "changed": true }
+```
+
+Dismiss: the vote counts nowhere and its image is back in the person's deck. Restore: it counts again. Both are idempotent – dismissing a dismissed vote keeps its first `dismissedAt`/`dismissedBy`, restoring a counting vote changes nothing; `changed` says whether something changed. An unknown id answers **404** `not_found`; a missing or too long `by` **400** `invalid_by`. Voting the image again (the person) clears a dismissal as well.
+
+### `POST /api/admin/voters/<login or id>/dismiss` · `POST /api/admin/voters/<login or id>/restore`
+
+```jsonc
+// dismiss: body { "by": "maintainer@example.org", "scene": "home" }   // scene optional
+{ "user": { "userId": 3, "login": "anna" }, "scene": "home", "dismissed": 2, "dismissedAt": "2026-11-21T10:00:00.123Z" }
+// restore: body { "scene": "home", "dismissedAt": "2026-11-21T10:00:00.123Z" }   // both optional
+{ "user": { "userId": 3, "login": "anna" }, "scene": "home", "restored": 2 }
+```
+
+Dismiss every vote of one person that still counts – all runs, or only one scene – with one shared `dismissedAt` (`null` when nothing was left to dismiss). Restore brings back the person's dismissed votes: all, only one scene, and/or only the batch with that `dismissedAt` (to undo exactly one "dismiss all"). The person is matched as in `/votes?user=`; unknown: **404** `unknown_user`. Idempotent: repeating either answers `0`.
 
 ### `GET /api/admin/scenes`
 
@@ -101,13 +140,13 @@ A German Markdown instruction for Claude Code: per 👎 scene the scene id, grou
 
 ### `GET /api/admin/export?format=csv|json`
 
-Every vote (fields as in `/votes`, newest first) as a download (`Content-Disposition: attachment`). JSON: `{ "votes": [...] }` (the default). CSV: a header line, RFC 4180 quoting, CRLF; cells starting with `= + - @` get a leading `'` so spreadsheets don't run them.
+Every vote that counts (not dismissed; fields as in `/votes`, newest first) as a download (`Content-Disposition: attachment`). JSON: `{ "votes": [...] }` (the default). CSV: a header line, RFC 4180 quoting, CRLF; cells starting with `= + - @` get a leading `'` so spreadsheets don't run them.
 
 ## Privacy and security
 
 - No tracking, no analytics, no external fonts, scripts or CDNs.
 - Cookies: the session (`fv_session`, httpOnly, SameSite=Lax, Secure under https, 30 days; the database keeps only its SHA-256; signing out deletes it); during sign-in a ten-minute `fv_oauth` cookie for the OAuth `state`; the language cookie `fv_lang` only after the visitor switches the language. `localStorage` holds unsent votes only while offline.
-- Sign-in reads `GET /user` once with the user's OAuth token; the token is not stored. Stored per allowed user: GitHub id, login and name (the account's `created_at` is only compared, never stored). Nothing is stored about refused sign-ins.
+- Sign-in reads `GET /user` once with the user's OAuth token; the token is not stored. Stored per allowed user: GitHub id, login and name (the account's `created_at` is only compared, never stored). Nothing is stored about refused sign-ins. A vote reset by the maintainer keeps when and by whom (the identifier flowplan-admin sends) until it is restored or voted again.
 - IP addresses are never stored: sign-in and wrong admin tokens are rate-limited by a daily rotating HMAC of the address (`ipKey()`). Votes (and changes, undos) are limited per user (180 per minute, 1,000 per hour, 5,000 per day), the deck to 120 loads per minute; over the limit the API answers 429. Request bodies are size-limited.
 - CSRF: every writing request must carry an `Origin` (or, without it, a `Referer`) equal to the origin of `VOTE_URL`, else 403; plus SameSite=Lax.
 - A strict Content Security Policy (`proxy.ts`): scripts only with the per-request nonce (`strict-dynamic`), styles only from the stylesheet, no inline scripts or style attributes, images only from this site and the gallery, no framing.

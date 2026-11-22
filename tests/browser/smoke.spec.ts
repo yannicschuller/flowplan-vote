@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ADMIN_TOKEN, dataDir } from "../../playwright.config";
 
-const seed = () => JSON.parse(readFileSync(join(dataDir, "browser-test.json"), "utf8")) as { voter: string; outsider: string; gallery: string };
+const seed = () => JSON.parse(readFileSync(join(dataDir, "browser-test.json"), "utf8")) as { voter: string; outsider: string; rita: string; gallery: string };
 
 async function signedIn(context: BrowserContext, token: string, baseURL: string) {
   await context.addCookies([{ name: "fv_session", value: token, url: baseURL, httpOnly: true, sameSite: "Lax" }]);
@@ -391,4 +391,59 @@ test("a login that is not on the list sees no access", async ({ browser, baseURL
   await expect(p).toHaveURL(/\/login$/);
   await expect(p.getByRole("heading", { name: "Galerie bewerten" })).toBeVisible();
   await anonymous.close();
+});
+
+test("a vote the maintainer resets comes back into the deck with a hint", async ({ browser, baseURL, request }) => {
+  const { rita } = seed();
+  const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+  const context = await browser.newContext({ locale: "en-GB", viewport: { width: 1280, height: 860 } });
+  await signedIn(context, rita, baseURL!);
+  const page = await context.newPage();
+  const csp = watchCsp(page);
+  await page.goto("/");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".vote-card.depth-0 img")).toHaveClass(/ready/);
+  // 👎 on the first card, skip the rest: the deck is empty.
+  const first = await title(page).innerText();
+  await page.keyboard.press("ArrowDown");
+  for (let i = 0; i < 11; i++) await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("heading", { name: "All done – the next gallery arrives tonight" })).toBeVisible();
+  await settled(page);
+
+  // The maintainer resets the 👎 (flowplan-admin does this server to server).
+  const { votes } = await (await request.get("/api/admin/votes?user=rita&verdict=down", { headers: auth })).json();
+  expect(votes).toHaveLength(1);
+  const dismissed = await request.post(`/api/admin/votes/${votes[0].id}/dismiss`, { headers: auth, data: { by: "maintainer@example.org" } });
+  expect(dismissed.status()).toBe(200);
+  expect((await request.post(`/api/admin/votes/${votes[0].id}/dismiss`, { data: { by: "x" } })).status()).toBe(401);
+
+  // Back in the deck, alone, with the hint.
+  await page.reload();
+  await expect(count(page)).toHaveText("12 / 12");
+  await expect(page.locator(".vote-card")).toHaveCount(1);
+  await expect(title(page)).toHaveText(first);
+  await expect(page.locator(".vote-card.depth-0 .chip.reset")).toHaveText("Your earlier vote was reset");
+  if (process.env.SCREENSHOTS_DIR) {
+    await expect(page.locator(".vote-card.depth-0 img")).toHaveClass(/ready/);
+    await page.screenshot({ path: join(process.env.SCREENSHOTS_DIR, "reset-desktop.png") });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({ path: join(process.env.SCREENSHOTS_DIR, "reset-phone.png") });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
+    await page.setViewportSize({ width: 1280, height: 860 });
+  }
+  // "My votes": eleven left, with the note.
+  await page.goto("/mine");
+  await expect(page.locator(".vote-item")).toHaveCount(11);
+  await expect(page.locator(".notice.reset-note")).toContainText("One of your votes was reset by the maintainer");
+  // Voting again makes a normal vote of it.
+  await page.goto("/");
+  await expect(page.locator(".vote-card.depth-0 img")).toHaveClass(/ready/);
+  await page.keyboard.press("ArrowUp");
+  await expect(page.getByRole("heading", { name: "All done – the next gallery arrives tonight" })).toBeVisible();
+  await settled(page);
+  const again = await (await request.get("/api/admin/votes?user=rita&dismissed=include", { headers: auth })).json();
+  expect(again.votes.filter((v: { dismissed: boolean }) => v.dismissed)).toHaveLength(0);
+  expect(again.votes.find((v: { id: number }) => v.id === votes[0].id).verdict).toBe("up");
+  expect(csp).toEqual([]);
+  await context.close();
 });

@@ -5,7 +5,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { config } from "./config";
 
-const MIGRATIONS: string[] = [
+export const MIGRATIONS: string[] = [
   // 1: accounts, sessions, votes, rate limits
   `CREATE TABLE users (
      id INTEGER PRIMARY KEY,
@@ -48,6 +48,13 @@ const MIGRATIONS: string[] = [
      window_start INTEGER NOT NULL,
      count INTEGER NOT NULL
    );`,
+  // 2: soft dismiss of votes by the maintainer (admin API). A dismissed vote
+  // counts nowhere and its image is back in the person's deck; voting it
+  // again clears both columns. dismissed_by is the admin's identifier as
+  // flowplan-admin sends it.
+  `ALTER TABLE votes ADD COLUMN dismissed_at INTEGER;
+   ALTER TABLE votes ADD COLUMN dismissed_by TEXT;
+   CREATE INDEX votes_dismissed ON votes(dismissed_at) WHERE dismissed_at IS NOT NULL;`,
 ];
 export const SCHEMA_VERSION = MIGRATIONS.length;
 

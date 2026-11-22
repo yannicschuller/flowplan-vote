@@ -609,6 +609,11 @@ export function Voter(props: Props) {
                           {t("Deine Bewertung", "Your vote")}: {current.verdict === "up" ? "👍" : current.verdict === "down" ? "👎" : t("übersprungen", "skipped")}
                         </span>
                       )}
+                      {depth === 0 && !current && c.reset && (
+                        <span className="chip reset" title={t("Der Maintainer hat deine Stimme zu diesem Bild zurückgesetzt – bewerte es gern noch einmal.", "The maintainer reset your vote on this image – feel free to vote again.")}>
+                          {t("Deine frühere Stimme wurde zurückgesetzt", "Your earlier vote was reset")}
+                        </span>
+                      )}
                       {depth === 0 && !current && c.changed && (
                         <span className="chip changed" title={t("Das Bild hat sich seit deiner letzten Bewertung geändert.", "The image changed since your last vote.")}>
                           {t("Geändert", "Changed")} · {t("vorher", "before")} {c.changed.verdict === "up" ? "👍" : c.changed.verdict === "down" ? "👎" : "–"}

@@ -418,6 +418,10 @@ form.inline {
   background: var(--warn-bg);
   color: var(--warn);
 }
+.notice.reset-note {
+  background: var(--blue-light);
+  color: var(--accent-strong);
+}
 .notice ul {
   margin: 6px 0 0;
   padding-left: 18px;
@@ -469,6 +473,12 @@ kbd {
   background: var(--warn-bg);
   color: var(--warn);
   border-color: transparent;
+}
+.chip.reset {
+  background: var(--blue-light);
+  color: var(--accent-strong);
+  border-color: transparent;
+  white-space: normal;
 }
 .chip.verdict.up {
   background: var(--like-bg);

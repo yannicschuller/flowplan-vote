@@ -1,7 +1,9 @@
 // Votes: one verdict (up, down, skip) per person and image, optionally with
 // a short comment. The deck is what a person has not voted on yet: shots
 // without a vote on their current image (never voted, or the pixels changed
-// since the last vote on that scene and variant).
+// since the last vote on that scene and variant). A vote the maintainer
+// dismissed (admin API) counts as no vote: the image is back in the deck,
+// with a hint on the card.
 import { all, now, one, run, transaction } from "./db";
 import { hmac } from "./secret";
 import { HttpError, str } from "./http";
@@ -27,7 +29,13 @@ export type VoteRow = {
   verdict: Verdict;
   comment: string;
   created_at: number;
+  // Set when the maintainer dismissed the vote (admin API): it counts nowhere.
+  dismissed_at: number | null;
+  dismissed_by: string | null;
 };
+
+// Only votes that were not dismissed count (SQL condition on the votes table).
+export const ACTIVE = "dismissed_at IS NULL";
 
 // One card of the deck, as the voting UI gets it.
 export type Card = {
@@ -45,6 +53,9 @@ export type Card = {
   vote: { verdict: Verdict; comment: string } | null;
   // This person voted on an earlier image of this scene and variant.
   changed: { verdict: Verdict; at: number } | null;
+  // This person's last vote on this scene and variant was dismissed by the
+  // maintainer (and nothing newer since): the card says so.
+  reset: { verdict: Verdict; at: number } | null;
 };
 
 export type DeckFilter = { group?: string; variant?: string; all?: boolean };
@@ -60,14 +71,18 @@ export function cleanComment(v: unknown): string {
 }
 
 export function deck(user: { id: number }, g: Gallery, filter: DeckFilter = {}): Card[] {
-  const votes = all<Pick<VoteRow, "scene" | "variant" | "hash" | "verdict" | "comment" | "created_at">>(
-    "SELECT scene,variant,hash,verdict,comment,created_at FROM votes WHERE user_id=? ORDER BY created_at DESC, id DESC",
+  const votes = all<Pick<VoteRow, "scene" | "variant" | "hash" | "verdict" | "comment" | "created_at" | "dismissed_at">>(
+    "SELECT scene,variant,hash,verdict,comment,created_at,dismissed_at FROM votes WHERE user_id=? ORDER BY created_at DESC, id DESC",
     user.id,
   );
   const exact = new Map<string, (typeof votes)[number]>();
   const latest = new Map<string, (typeof votes)[number]>();
+  // Newest vote per scene and variant, dismissed or not (for the "reset" hint).
+  const newest = new Map<string, (typeof votes)[number]>();
   for (const v of votes) {
     const key = shotKey(v);
+    if (!newest.has(key)) newest.set(key, v);
+    if (v.dismissed_at !== null) continue;
     exact.set(`${key}\u0000${v.hash}`, exact.get(`${key}\u0000${v.hash}`) ?? v);
     if (!latest.has(key)) latest.set(key, v);
   }
@@ -78,6 +93,8 @@ export function deck(user: { id: number }, g: Gallery, filter: DeckFilter = {}):
     const mine = exact.get(`${shotKey(shot)}\u0000${shot.hash}`);
     if (mine && !filter.all) continue;
     const last = latest.get(shotKey(shot));
+    const top = newest.get(shotKey(shot));
+    const reset = !mine && top && top.dismissed_at !== null ? { verdict: top.verdict, at: top.created_at } : null;
     cards.push({
       scene: shot.scene,
       group: shot.group,
@@ -90,7 +107,8 @@ export function deck(user: { id: number }, g: Gallery, filter: DeckFilter = {}):
       width: shot.width,
       height: shot.height,
       vote: mine ? { verdict: mine.verdict, comment: mine.comment } : null,
-      changed: !mine && last ? { verdict: last.verdict, at: last.created_at } : null,
+      changed: !mine && !reset && last ? { verdict: last.verdict, at: last.created_at } : null,
+      reset,
     });
   }
   // A random order per person and gallery run instead of the gallery's
@@ -103,7 +121,7 @@ export function deck(user: { id: number }, g: Gallery, filter: DeckFilter = {}):
 // Counts for the progress: shots in the filter, and how many of them are voted on (current image).
 export function progress(user: { id: number }, g: Gallery, filter: DeckFilter = {}) {
   const shots = g.shots.filter((x) => (!filter.group || x.group === filter.group) && (!filter.variant || x.variant === filter.variant));
-  const voted = new Set(all<{ scene: string; variant: string; hash: string }>("SELECT scene,variant,hash FROM votes WHERE user_id=?", user.id).map((r) => `${shotKey(r)}\u0000${r.hash}`));
+  const voted = new Set(all<{ scene: string; variant: string; hash: string }>(`SELECT scene,variant,hash FROM votes WHERE user_id=? AND ${ACTIVE}`, user.id).map((r) => `${shotKey(r)}\u0000${r.hash}`));
   return { total: shots.length, voted: shots.filter((x) => voted.has(`${shotKey(x)}\u0000${x.hash}`)).length };
 }
 
@@ -114,7 +132,8 @@ const bounded = (v: unknown, name: string, max: number) => {
 };
 
 // Sets this person's verdict on one image (replacing an earlier one on the
-// same image). Answers the vote and what it replaced.
+// same image, also a dismissed one). Answers the vote and what it replaced
+// (a dismissed vote replaced nothing that counted).
 export async function castVote(user: SessionUser, input: Record<string, unknown>) {
   const scene = bounded(input.scene, "scene", 200);
   const variant = bounded(input.variant, "variant", 50);
@@ -131,7 +150,8 @@ export async function castVote(user: SessionUser, input: Record<string, unknown>
     run(
       `INSERT INTO votes(user_id,scene,grp,title,variant,hash,gallery_generated,"commit",version,verdict,comment,created_at)
        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
-       ON CONFLICT(user_id,scene,variant,hash) DO UPDATE SET verdict=excluded.verdict, comment=excluded.comment, created_at=excluded.created_at`,
+       ON CONFLICT(user_id,scene,variant,hash) DO UPDATE SET verdict=excluded.verdict, comment=excluded.comment, created_at=excluded.created_at,
+         dismissed_at=NULL, dismissed_by=NULL`,
       user.id,
       scene,
       shot.group,
@@ -146,7 +166,8 @@ export async function castVote(user: SessionUser, input: Record<string, unknown>
       at,
     );
     const vote = one<VoteRow>("SELECT * FROM votes WHERE user_id=? AND scene=? AND variant=? AND hash=?", user.id, scene, variant, hash)!;
-    return { vote: publicVote(vote), previous: previous ? { verdict: previous.verdict, comment: previous.comment } : null };
+    const counted = previous && previous.dismissed_at === null ? previous : null;
+    return { vote: publicVote(vote), previous: counted ? { verdict: counted.verdict, comment: counted.comment } : null };
   });
 }
 
@@ -159,8 +180,9 @@ export function removeVoteOn(user: SessionUser, input: Record<string, unknown>) 
   return { deleted: Number(result.changes) };
 }
 
+// A dismissed vote is no longer the person's ("My votes" does not show it).
 function ownVote(user: SessionUser, id: number) {
-  const vote = one<VoteRow>("SELECT * FROM votes WHERE id=? AND user_id=?", id, user.id);
+  const vote = one<VoteRow>(`SELECT * FROM votes WHERE id=? AND user_id=? AND ${ACTIVE}`, id, user.id);
   if (!vote) throw new HttpError(404, "not_found", "Bewertung nicht gefunden. / Vote not found.");
   return vote;
 }
@@ -197,11 +219,12 @@ export const publicVote = (v: VoteRow) => ({
 export type PublicVote = ReturnType<typeof publicVote>;
 
 // "My votes": everything this person voted, newest first, with the current
-// gallery's thumbnail where the scene and variant still exist.
+// gallery's thumbnail where the scene and variant still exist. Dismissed
+// votes are left out (they count nowhere; resetCount() says how many).
 export type MyVote = PublicVote & { thumb: string; image: string; current: boolean };
 export function myVotes(user: { id: number }, g: Gallery | null): MyVote[] {
   const shots = new Map((g?.shots ?? []).map((x) => [shotKey(x), x]));
-  return all<VoteRow>("SELECT * FROM votes WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 5000", user.id).map((v) => {
+  return all<VoteRow>(`SELECT * FROM votes WHERE user_id=? AND ${ACTIVE} ORDER BY created_at DESC, id DESC LIMIT 5000`, user.id).map((v) => {
     const shot = shots.get(shotKey(v));
     return {
       ...publicVote(v),
@@ -210,4 +233,9 @@ export function myVotes(user: { id: number }, g: Gallery | null): MyVote[] {
       current: !!shot && shot.hash === v.hash,
     };
   });
+}
+
+// How many of this person's votes the maintainer dismissed (for the note on "My votes").
+export function resetCount(user: { id: number }): number {
+  return one<{ n: number }>("SELECT COUNT(*) AS n FROM votes WHERE user_id=? AND dismissed_at IS NOT NULL", user.id)?.n ?? 0;
 }

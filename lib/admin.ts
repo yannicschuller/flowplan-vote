@@ -1,13 +1,16 @@
 // The admin API for flowplan-admin (README "Admin API"): Bearer
 // VOTE_ADMIN_TOKEN, compared in constant time; without a token configured
 // every path answers 404. JSON only, no CORS headers (server to server).
-import { all, one } from "./db";
-import { HttpError, clientIp, json } from "./http";
+// Dismissed votes (dismissed_at set, see dismissVote) count nowhere: not in
+// the summary, the scenes, the prompt or the export; /votes and /voters show
+// them only where asked for.
+import { all, now, one, run } from "./db";
+import { HttpError, clientIp, int, json, readInput, str } from "./http";
 import { config } from "./config";
 import { safeEqual } from "./secret";
 import { LIMITS, ipKey, limit } from "./rate-limit";
 import { galleryOrNull, imageUrl, shotKey, type Gallery } from "./gallery";
-import { isVerdict, type Verdict } from "./votes";
+import { ACTIVE, isVerdict, type Verdict } from "./votes";
 import { formatDate } from "./i18n";
 
 type Row = {
@@ -25,8 +28,12 @@ type Row = {
   verdict: Verdict;
   comment: string;
   created_at: number;
+  dismissed_at: number | null;
+  dismissed_by: string | null;
 };
-const SELECT = `SELECT v.id,v.user_id,u.login,v.scene,v.grp,v.title,v.variant,v.hash,v.gallery_generated,v."commit",v.version,v.verdict,v.comment,v.created_at FROM votes v JOIN users u ON u.id=v.user_id`;
+const SELECT = `SELECT v.id,v.user_id,u.login,v.scene,v.grp,v.title,v.variant,v.hash,v.gallery_generated,v."commit",v.version,v.verdict,v.comment,v.created_at,v.dismissed_at,v.dismissed_by FROM votes v JOIN users u ON u.id=v.user_id`;
+// The same condition on the joined votes table (alias v).
+const V_ACTIVE = `v.${ACTIVE}`;
 
 export function requireAdmin(request: Request) {
   const token = config.adminToken();
@@ -45,6 +52,7 @@ const isCurrent = (hashes: Map<string, string>, v: { scene: string; variant: str
 
 const apiVote = (v: Row, hashes: Map<string, string>) => ({
   id: v.id,
+  userId: v.user_id,
   login: v.login,
   scene: v.scene,
   group: v.grp,
@@ -58,6 +66,9 @@ const apiVote = (v: Row, hashes: Map<string, string>) => ({
   comment: v.comment,
   createdAt: iso(v.created_at),
   current: isCurrent(hashes, v),
+  dismissed: v.dismissed_at !== null,
+  dismissedAt: iso(v.dismissed_at),
+  dismissedBy: v.dismissed_at !== null ? v.dismissed_by || "" : null,
 });
 // Times in admin answers are ISO strings (galleryGenerated already is one).
 function iso(ms: number): string;
@@ -75,13 +86,13 @@ export async function adminSummary() {
   const totals = one<{ up: number; down: number; skip: number; comments: number; voters: number; downVoters: number; latest: number | null }>(
     `SELECT COALESCE(SUM(verdict='up'),0) AS up, COALESCE(SUM(verdict='down'),0) AS down, COALESCE(SUM(verdict='skip'),0) AS skip,
             COALESCE(SUM(comment<>''),0) AS comments, COUNT(DISTINCT user_id) AS voters,
-            COUNT(DISTINCT CASE WHEN verdict='down' THEN user_id END) AS downVoters, MAX(created_at) AS latest FROM votes`,
+            COUNT(DISTINCT CASE WHEN verdict='down' THEN user_id END) AS downVoters, MAX(created_at) AS latest FROM votes WHERE ${ACTIVE}`,
   )!;
   // voters / downVoters: distinct people (with any vote / with a 👎) in the group.
   const byGroup = all<{ group: string; up: number; down: number; skip: number; voters: number; downVoters: number }>(
     `SELECT grp AS "group", SUM(verdict='up') AS up, SUM(verdict='down') AS down, SUM(verdict='skip') AS skip,
             COUNT(DISTINCT user_id) AS voters, COUNT(DISTINCT CASE WHEN verdict='down' THEN user_id END) AS downVoters
-     FROM votes GROUP BY grp`,
+     FROM votes WHERE ${ACTIVE} GROUP BY grp`,
   );
   // In the gallery's group order, unknown groups after them.
   const order = new Map((g?.groups ?? []).map((name, i) => [name, i]));
@@ -94,10 +105,41 @@ export async function adminSummary() {
   };
 }
 
-// GET /api/admin/votes?verdict=&group=&scene=&since=&limit=&cursor=
+// An account by login (case-insensitive) or, when no login matches and it is
+// all digits, by the vote service's account id (`userId` in the answers).
+type Account = { id: number; login: string; name: string };
+export function findUser(raw: string): Account | undefined {
+  const value = raw.trim().slice(0, 100);
+  if (!value) return undefined;
+  return (
+    one<Account>("SELECT id,login,name FROM users WHERE login=? COLLATE NOCASE ORDER BY id LIMIT 1", value) ??
+    (/^\d{1,12}$/.test(value) ? one<Account>("SELECT id,login,name FROM users WHERE id=?", Number(value)) : undefined)
+  );
+}
+const requireUser = (raw: string) => {
+  const user = findUser(raw);
+  if (!user) throw new HttpError(404, "unknown_user", "No such account.");
+  return user;
+};
+
+// dismissed=exclude (default) | include | only
+function dismissedFilter(params: URLSearchParams) {
+  const value = params.get("dismissed") || "exclude";
+  if (value !== "exclude" && value !== "include" && value !== "only") throw new HttpError(400, "invalid_dismissed", "dismissed must be exclude, include or only.");
+  return value === "exclude" ? V_ACTIVE : value === "only" ? `NOT ${V_ACTIVE}` : null;
+}
+
+// GET /api/admin/votes?verdict=&group=&scene=&user=&dismissed=&since=&limit=&cursor=
 export async function adminVotes(params: URLSearchParams) {
   const where: string[] = [];
   const args: (string | number)[] = [];
+  const dismissed = dismissedFilter(params);
+  if (dismissed) where.push(dismissed);
+  const user = params.get("user");
+  if (user) {
+    where.push("v.user_id=?");
+    args.push(requireUser(user).id);
+  }
   const verdict = params.get("verdict");
   if (verdict) {
     if (!isVerdict(verdict)) throw new HttpError(400, "invalid_verdict", "verdict must be up, down or skip.");
@@ -140,7 +182,7 @@ export async function adminVotes(params: URLSearchParams) {
 // lastVerdict; `current` = the scene's latest vote is on an image the
 // current gallery still shows; history = up/down per gallery run.
 export async function adminScenes() {
-  const rows = all<Row>(`${SELECT} ORDER BY v.created_at DESC, v.id DESC`);
+  const rows = all<Row>(`${SELECT} WHERE ${V_ACTIVE} ORDER BY v.created_at DESC, v.id DESC`);
   const g = await galleryOrNull();
   const hashes = currentHashes(g);
   // Images of the current gallery per scene: desktop-light, else the first variant.
@@ -209,7 +251,7 @@ export async function adminPrompt(params: URLSearchParams) {
   const g = await galleryOrNull();
   const hashes = currentHashes(g);
   const files = new Map((g?.shots ?? []).map((x) => [shotKey(x), x.file]));
-  const rows = all<Row>(`${SELECT} WHERE v.verdict IN ('up','down')${group ? " AND v.grp=?" : ""} ORDER BY v.created_at ASC, v.id ASC`, ...(group ? [group] : []));
+  const rows = all<Row>(`${SELECT} WHERE ${V_ACTIVE} AND v.verdict IN ('up','down')${group ? " AND v.grp=?" : ""} ORDER BY v.created_at ASC, v.id ASC`, ...(group ? [group] : []));
   const inScope = rows.filter((v) => scope === "all" || isCurrent(hashes, v));
   // No logins in the prompt (in open mode they are strangers' personal
   // data): people are counted by user id, comments go in without a name.
@@ -294,7 +336,7 @@ export async function adminPrompt(params: URLSearchParams) {
   return { prompt: lines.join("\n"), scenes: downList.length };
 }
 
-// GET /api/admin/export?format=csv|json: every vote, newest first.
+// GET /api/admin/export?format=csv|json: every vote that counts (not dismissed), newest first.
 const CSV_FIELDS = ["id", "login", "scene", "group", "title", "variant", "hash", "galleryGenerated", "commit", "version", "verdict", "comment", "createdAt", "current"] as const;
 // Cells starting with = + - @ (or a tab/CR) are prefixed with ' so a spreadsheet never runs them.
 const csvCell = (value: unknown) => {
@@ -306,7 +348,7 @@ export async function adminExport(params: URLSearchParams) {
   const format = params.get("format") || "json";
   if (format !== "csv" && format !== "json") throw new HttpError(400, "invalid_format", "format must be csv or json.");
   const hashes = currentHashes(await galleryOrNull());
-  const votes = all<Row>(`${SELECT} ORDER BY v.created_at DESC, v.id DESC`).map((v) => apiVote(v, hashes));
+  const votes = all<Row>(`${SELECT} WHERE ${V_ACTIVE} ORDER BY v.created_at DESC, v.id DESC`).map((v) => apiVote(v, hashes));
   const stamp = new Date().toISOString().slice(0, 10);
   if (format === "json")
     return json({ votes }, { headers: { "Content-Disposition": `attachment; filename="flowplan-votes-${stamp}.json"` } });
@@ -321,21 +363,135 @@ export async function adminExport(params: URLSearchParams) {
   });
 }
 
-export async function adminRoute(request: Request, name: string) {
+// GET /api/admin/voters: everyone with a vote (also only dismissed ones),
+// for the admin's picker. Counts are of the votes that count; `dismissed`
+// counts the dismissed ones. Logins are for the admin only, never the prompt.
+export function adminVoters() {
+  const voters = all<{ userId: number; login: string; name: string; votes: number; up: number; down: number; skip: number; comments: number; dismissed: number; lastVoteAt: number | null }>(
+    `SELECT u.id AS userId, u.login, u.name,
+            COALESCE(SUM(v.dismissed_at IS NULL),0) AS votes,
+            COALESCE(SUM(v.dismissed_at IS NULL AND v.verdict='up'),0) AS up,
+            COALESCE(SUM(v.dismissed_at IS NULL AND v.verdict='down'),0) AS down,
+            COALESCE(SUM(v.dismissed_at IS NULL AND v.verdict='skip'),0) AS skip,
+            COALESCE(SUM(v.dismissed_at IS NULL AND v.comment<>''),0) AS comments,
+            COALESCE(SUM(v.dismissed_at IS NOT NULL),0) AS dismissed,
+            MAX(CASE WHEN v.dismissed_at IS NULL THEN v.created_at END) AS lastVoteAt
+     FROM users u JOIN votes v ON v.user_id=u.id
+     GROUP BY u.id ORDER BY votes DESC, lower(u.login) ASC`,
+  );
+  return { voters: voters.map((x) => ({ ...x, lastVoteAt: iso(x.lastVoteAt ?? null) })) };
+}
+
+// Who dismissed (flowplan-admin's identifier of the admin): required, one
+// line, at most 200 characters.
+function dismissedBy(input: Record<string, unknown>) {
+  const by = str(input.by, 400).replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+  if (!by || [...by].length > 200) throw new HttpError(400, "invalid_by", "by (who dismisses) missing or longer than 200 characters.");
+  return by;
+}
+const sceneOf = (input: Record<string, unknown>) => {
+  if (input.scene === undefined || input.scene === null || input.scene === "") return null;
+  const scene = str(input.scene, 201);
+  if (!scene || scene.length > 200) throw new HttpError(400, "invalid_scene", "scene must be a scene id.");
+  return scene;
+};
+
+async function voteById(id: number) {
+  const row = one<Row>(`${SELECT} WHERE v.id=?`, id);
+  if (!row) throw new HttpError(404, "not_found", "Vote not found.");
+  return row;
+}
+
+// POST /api/admin/votes/<id>/dismiss {by}: the vote no longer counts and its
+// image is back in the person's deck. Idempotent: an already dismissed vote
+// keeps its first dismissedAt/dismissedBy (changed: false).
+export async function dismissVote(id: number, input: Record<string, unknown>) {
+  const by = dismissedBy(input);
+  await voteById(id);
+  const changed = Number(run("UPDATE votes SET dismissed_at=?, dismissed_by=? WHERE id=? AND dismissed_at IS NULL", now(), by, id).changes) > 0;
+  return { vote: apiVote(await voteById(id), currentHashes(await galleryOrNull())), changed };
+}
+
+// POST /api/admin/votes/<id>/restore: undoes the dismiss (idempotent).
+export async function restoreVote(id: number) {
+  await voteById(id);
+  const changed = Number(run("UPDATE votes SET dismissed_at=NULL, dismissed_by=NULL WHERE id=? AND dismissed_at IS NOT NULL", id).changes) > 0;
+  return { vote: apiVote(await voteById(id), currentHashes(await galleryOrNull())), changed };
+}
+
+// POST /api/admin/voters/<login or id>/dismiss {by, scene?}: every vote of
+// the person that still counts (optionally of one scene), all with the same
+// dismissedAt – restore with it to undo exactly this batch.
+export function dismissUserVotes(rawUser: string, input: Record<string, unknown>) {
+  const by = dismissedBy(input);
+  const scene = sceneOf(input);
+  const user = requireUser(rawUser);
+  const at = now();
+  const result = run(`UPDATE votes SET dismissed_at=?, dismissed_by=? WHERE user_id=? AND ${ACTIVE}${scene ? " AND scene=?" : ""}`, at, by, user.id, ...(scene ? [scene] : []));
+  const n = Number(result.changes);
+  return { user: { userId: user.id, login: user.login }, scene, dismissed: n, dismissedAt: n ? iso(at) : null };
+}
+
+// POST /api/admin/voters/<login or id>/restore {scene?, dismissedAt?}: the
+// person's dismissed votes count again (optionally only one scene, or only
+// the batch dismissed at that time).
+export function restoreUserVotes(rawUser: string, input: Record<string, unknown>) {
+  const scene = sceneOf(input);
+  let at: number | null = null;
+  if (input.dismissedAt !== undefined && input.dismissedAt !== null && input.dismissedAt !== "") {
+    at = typeof input.dismissedAt === "string" ? Date.parse(input.dismissedAt) : NaN;
+    if (!Number.isFinite(at)) throw new HttpError(400, "invalid_dismissed_at", "dismissedAt must be an ISO time from a dismiss answer.");
+  }
+  const user = requireUser(rawUser);
+  const where = ["user_id=?", "dismissed_at IS NOT NULL"];
+  const args: (string | number)[] = [user.id];
+  if (scene) {
+    where.push("scene=?");
+    args.push(scene);
+  }
+  if (at !== null) {
+    where.push("dismissed_at=?");
+    args.push(at);
+  }
+  const result = run(`UPDATE votes SET dismissed_at=NULL, dismissed_by=NULL WHERE ${where.join(" AND ")}`, ...args);
+  return { user: { userId: user.id, login: user.login }, scene, restored: Number(result.changes) };
+}
+
+const READS = new Set(["summary", "votes", "voters", "scenes", "prompt", "export"]);
+
+// `path`: the segments after /api/admin/ (a string is split at "/").
+export async function adminRoute(request: Request, path: string | string[]) {
   requireAdmin(request);
+  const parts = (typeof path === "string" ? path.split("/") : path).filter(Boolean);
   const params = new URL(request.url).searchParams;
+  const method = request.method.toUpperCase();
+  if (parts.length === 1 && READS.has(parts[0])) {
+    if (method !== "GET" && method !== "HEAD") throw new HttpError(405, "method_not_allowed", "Method not allowed.");
+    return adminRead(parts[0], params);
+  }
+  const action = parts.length === 3 ? parts[2] : "";
+  if ((parts[0] !== "votes" && parts[0] !== "voters") || (action !== "dismiss" && action !== "restore")) throw new HttpError(404, "not_found", "Not found.");
+  if (method !== "POST") throw new HttpError(405, "method_not_allowed", "Method not allowed.");
+  const input = await readInput(request, 4 * 1024);
+  if (parts[0] === "voters") return json(action === "dismiss" ? dismissUserVotes(parts[1], input) : restoreUserVotes(parts[1], input));
+  const id = int(parts[1]);
+  if (id === null) throw new HttpError(404, "not_found", "Vote not found.");
+  return json(action === "dismiss" ? await dismissVote(id, input) : await restoreVote(id));
+}
+
+async function adminRead(name: string, params: URLSearchParams) {
   switch (name) {
     case "summary":
       return json(await adminSummary());
     case "votes":
       return json(await adminVotes(params));
+    case "voters":
+      return json(adminVoters());
     case "scenes":
       return json(await adminScenes());
     case "prompt":
       return json(await adminPrompt(params));
-    case "export":
-      return adminExport(params);
     default:
-      throw new HttpError(404, "not_found", "Not found.");
+      return adminExport(params);
   }
 }

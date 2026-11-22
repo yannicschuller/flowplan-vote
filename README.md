@@ -27,11 +27,11 @@ A vote sent just before a new gallery run still finds its image: the last three 
 
 - One screenshot, as large as the screen allows (desktop and phone), with title, scene id, group, variant (Desktop/Phone · light/dark) and the progress (`37 / 412`). The next two images are already loaded in the stack behind, one more is preloaded.
 - **Swipe** (pointer events – touch, pen and mouse): right 👍, left 👎, up skip. The card follows the finger, tilts, gets a green or red tint and a stamp; past the threshold (a quarter of the width, a fifth of the height, or a quick flick) it flies out, otherwise it springs back.
-- **Buttons** for undo, 👎, skip, 👍 and comment, each with a short label under it (and its key on devices with a mouse), with accessible names.
+- **Buttons** for back, 👎, skip, 👍 and comment, each with a short label under it (and its key on devices with a mouse), with accessible names.
 - **Help**: "How it works" – what the gallery is, the legend of buttons, swipes and keys, and the rules (changed screens come back, the maintainer sees votes with the GitHub name, "My votes"). It opens by itself on the first visit (remembered in `localStorage`, else once per session) and any time from the "Help" button or `?`.
-- **Keys**: `↑`/`K` 👍, `↓`/`J` 👎, `→`/`L` skip, `C` comment, `Z` undo, `Enter` full image (also double-click), `?` help. `Esc` leaves the comment field and keeps the text.
-- **Comment** before the verdict (sent with it) or after it ("Add a comment" under the buttons, saved at once).
-- **Undo** puts the last card back and restores what you had on that image before (up to 50 steps).
+- **Keys**: `↑`/`K` 👍, `↓`/`J` 👎, `→`/`L` skip, `C` comment, `←`/`Z` back, `Enter` full image (also double-click), `?` help. `Esc` leaves the comment field and keeps the text.
+- **Comment** before the verdict or after it ("Add a comment" under the buttons, saved at once). A comment written before the verdict is a draft of that card: it goes with the card's verdict even when the field was closed (the comment button then shows a dot and is named "Comment (draft)"), and it is gone after the vote – the next card never shows the old text.
+- **Back** (`←`/`Z`) shows the previous card again, with your verdict on it ("Your vote: 👎") and your comment loaded as its draft; pressing it again goes further back (up to 50 cards). Nothing is deleted: the vote stays saved until you vote on that card again, which replaces verdict and comment (it still counts once). From a card you went back to, you move on only by voting.
 - **Offline**: votes go out at once; when the network is gone they wait in a queue (memory and `localStorage`, per person) and are sent again when the browser is back online or every 20 seconds. One entry per image, so the last change wins.
 - The verdict is announced to screen readers (`role="status"`); focus states are visible; with `prefers-reduced-motion` the cards don't move.
 - Empty deck: "Alles bewertet – die nächste Galerie kommt heute Nacht".

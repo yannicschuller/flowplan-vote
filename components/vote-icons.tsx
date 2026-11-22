@@ -4,10 +4,10 @@ const Svg = ({ children, size = 20 }: { children: React.ReactNode; size?: number
     {children}
   </svg>
 );
-export const UndoIcon = () => (
+export const BackIcon = () => (
   <Svg>
-    <path d="M9 14 4 9l5-5" />
-    <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
+    <path d="M19 12H5" />
+    <path d="m11 18-6-6 6-6" />
   </Svg>
 );
 export const SkipIcon = () => (

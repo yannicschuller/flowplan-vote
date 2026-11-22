@@ -113,7 +113,8 @@ const voteLimits = (userId: number) => {
 };
 
 // POST /api/votes {scene, variant, hash, verdict, comment}: set the verdict on one image.
-// DELETE /api/votes {scene, variant, hash}: remove it again (undo).
+// DELETE /api/votes {scene, variant, hash}: remove it again (the undo of older
+// clients – a queue in localStorage may still hold one; "Back" deletes nothing, #439).
 export async function votesRoute(request: Request) {
   const user = requireVoter(request);
   const input = await readInput(request, 16 * 1024);

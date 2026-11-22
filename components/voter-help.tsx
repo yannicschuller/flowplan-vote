@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import Link from "next/link";
 import { useT } from "./i18n";
-import { CommentIcon, SkipIcon, UndoIcon, ZoomIcon } from "./vote-icons";
+import { BackIcon, CommentIcon, SkipIcon, ZoomIcon } from "./vote-icons";
 
 const SEEN_KEY = "fv_guide_seen";
 let seenThisPage = false;
@@ -96,12 +96,15 @@ export function VoterHelp({ dialogRef }: { dialogRef: RefObject<HTMLDialogElemen
           </LegendRow>
           <LegendRow kind="comment" icon={<CommentIcon />} name={t("Kommentar", "Comment")} keyCap="C">
             {t(
-              "Schreib kurz, was dir auffällt – er wird mit deiner nächsten Bewertung gespeichert. Schon bewertet? Unter der letzten Karte steht „Kommentar nachtragen“.",
-              "Write briefly what you notice – it is saved with your next vote. Already voted? Use “Add a comment” under the last card.",
+              "Schreib kurz, was dir auffällt – er gehört zu dieser Karte und wird mit deiner Bewertung gespeichert, auch wenn du das Feld schließt (ein Punkt am Knopf zeigt den Entwurf). Schon bewertet? Unter den Knöpfen steht „Kommentar nachtragen“.",
+              "Write briefly what you notice – it belongs to this card and is saved with your vote, even if you close the field (a dot on the button shows the draft). Already voted? Use “Add a comment” under the buttons.",
             )}
           </LegendRow>
-          <LegendRow kind="undo" icon={<UndoIcon />} name={t("Rückgängig", "Undo")} keyCap="Z">
-            {t("Holt die letzte Karte zurück, mit deiner vorherigen Bewertung.", "Brings the last card back, with your previous vote.")}
+          <LegendRow kind="back" icon={<BackIcon />} name={t("Zurück", "Back")} keyCap="← Z">
+            {t(
+              "Zeigt die vorige Karte wieder, mit deiner Bewertung und deinem Kommentar – mehrmals drücken geht weiter zurück. Deine Bewertung bleibt gespeichert, bis du die Karte neu bewertest.",
+              "Shows the previous card again, with your vote and comment – press again to go further back. Your vote stays saved until you vote on the card again.",
+            )}
           </LegendRow>
         </ul>
         <p className="help-more muted small">

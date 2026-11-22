@@ -1,14 +1,23 @@
 "use client";
 // The voting screen: a stack of gallery screenshots, one at a time.
 // Swipe right 👍, left 👎, up to skip (pointer events: touch and mouse), or
-// use the buttons and keys (↑/K like, ↓/J dislike, →/L skip, C comment, Z undo, Enter full image,
+// use the buttons and keys (↑/K like, ↓/J dislike, →/L skip, C comment, ←/Z back, Enter full image,
 // ? help – voter-help.tsx, which also opens by itself on the first visit). Votes go out at once through the queue (vote-queue.ts), which
 // keeps them while offline. Every position is set through CSS custom
 // properties from script – never a style attribute (CSP).
+//
+// A comment draft belongs to its card (#439): it is keyed by the image, goes
+// out with that card's verdict even when the panel is closed, and is gone
+// after the vote – the next card starts with its own saved comment or none.
+// Back (←/Z) only walks back through this round's history (up to 50 cards):
+// the card comes back with your verdict shown and your comment as its draft;
+// the vote stays saved until you vote on the card again, which replaces it.
+// The "last vote" comment (commentFor "last") has its own text and never
+// touches the draft.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useT } from "./i18n";
-import { CommentIcon, DeviceIcon, FilterIcon, SkipIcon, UndoIcon, ZoomIcon } from "./vote-icons";
+import { BackIcon, CommentIcon, DeviceIcon, FilterIcon, SkipIcon, ZoomIcon } from "./vote-icons";
 import { VoterHelp } from "./voter-help";
 import { VoteQueue, imageKey, type QueueState } from "./vote-queue";
 import { variantLabel, variantParts, verdictLabel } from "@/lib/labels";
@@ -26,7 +35,7 @@ type Props = {
   login: string;
 };
 type Mine = { verdict: Verdict; comment: string } | null;
-type HistoryEntry = { index: number; card: Card; verdict: Verdict; comment: string; before: Mine };
+type HistoryEntry = { index: number; card: Card; verdict: Verdict; comment: string };
 type Fly = "right" | "left" | "up";
 
 const FLY_MS = 260;
@@ -50,7 +59,11 @@ export function Voter(props: Props) {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   // What this person has on each image (from the server, then as changed here).
   const mine = useRef(new Map<string, Mine>());
-  const [comment, setComment] = useState("");
+  // The draft for the card on top, keyed by its image; for any other key the
+  // card's saved comment counts (see draftOf).
+  const [draft, setDraft] = useState({ key: "", text: "" });
+  // The text while editing the comment of the last vote.
+  const [lastText, setLastText] = useState("");
   const [commentFor, setCommentFor] = useState<"current" | "last" | null>(null);
   const [announcement, setAnnouncement] = useState("");
   const [notice, setNotice] = useState<{ kind: "err" | "warn"; text: string } | null>(null);
@@ -115,6 +128,8 @@ export function Voter(props: Props) {
       setTotal(next.all ? body.cards.length : body.progress?.total ?? body.cards.length);
       setIndex(0);
       setHistory([]);
+      setDraft({ key: "", text: "" });
+      setCommentFor((f) => (f === "last" ? null : f));
     } catch (error) {
       setNotice({ kind: "err", text: errorMessage((error as Error).message, t) });
     } finally {
@@ -153,23 +168,31 @@ export function Voter(props: Props) {
 
   // ---- Voting ----
 
+  // What this person has on a card now, and the comment draft for it.
+  const savedOf = (c: Card): Mine => {
+    const key = imageKey(c);
+    return mine.current.has(key) ? mine.current.get(key)! : c.vote;
+  };
+  const draftOf = (c: Card) => (draft.key === imageKey(c) ? draft.text : savedOf(c)?.comment ?? "");
+
   const vote = (verdict: Verdict) => {
     finishFlight();
     const i = indexRef.current;
     const c = cards[i];
     if (!c || loading) return;
     const key = imageKey(c);
-    const before = mine.current.has(key) ? mine.current.get(key)! : c.vote;
-    const text = commentFor === "current" ? comment.trim() : "";
+    // The draft goes with the verdict, open panel or not (#439).
+    const text = draftOf(c).trim();
     mine.current.set(key, { verdict, comment: text });
     queue.current?.push({ scene: c.scene, variant: c.variant, hash: c.hash, action: "set", verdict, comment: text });
-    setHistory((h) => [...h.slice(-49), { index: i, card: c, verdict, comment: text, before }]);
-    if (commentFor === "current") {
-      setComment("");
-      setCommentFor(null);
-    }
-    setNotice(null);
+    setHistory((h) => [...h.slice(-49), { index: i, card: c, verdict, comment: text }]);
     const next = cards[i + 1];
+    // The draft is used up (also while the card flies out); the next card starts
+    // without the old text – one seen before (after Back) shows its own comment.
+    setDraft({ key, text: "" });
+    setCommentFor(next && savedOf(next)?.comment ? "current" : null);
+    setLastText("");
+    setNotice(null);
     setAnnouncement(
       `${verdictLabel(t, verdict)}: ${c.title}${text ? ` (${t("mit Kommentar", "with comment")})` : ""}. ` +
         (next ? `${t("Nächstes", "Next")}: ${next.title}, ${variantLabel(t, next.variant)}.` : t("Alles bewertet.", "All done.")),
@@ -193,21 +216,32 @@ export function Voter(props: Props) {
     flying.current = { timer: setTimeout(finishFlight, FLY_MS), done: advance };
   };
 
-  const undo = () => {
+  // Back: the previous card on top again, with your verdict and comment – the
+  // vote stays saved (nothing is sent) until you vote on the card again.
+  const back = () => {
     finishFlight();
     const last = history[history.length - 1];
-    if (!last) return;
-    const key = imageKey(last.card);
-    mine.current.set(key, last.before);
-    if (last.before) queue.current?.push({ scene: last.card.scene, variant: last.card.variant, hash: last.card.hash, action: "set", ...last.before });
-    else queue.current?.push({ scene: last.card.scene, variant: last.card.variant, hash: last.card.hash, action: "delete" });
+    if (!last || loading) return;
+    // The card that just flew out may be the one coming back: at rest again
+    // (the index ends where it was, so the effect below would not reset it).
+    const el = topCard.current;
+    el?.classList.remove("dragging", "settling", "flying", "fly-right", "fly-left", "fly-up");
+    setVars(el, 0, 0);
     setHistory((h) => h.slice(0, -1));
     setIndex(last.index);
-    if (last.comment) {
-      setComment(last.comment);
-      setCommentFor("current");
-    } else if (commentFor === "last") setCommentFor(null);
-    setAnnouncement(t(`Rückgängig: ${last.card.title} ist wieder da.`, `Undone: ${last.card.title} is back.`));
+    setDraft({ key: "", text: "" });
+    setLastText("");
+    const saved = savedOf(last.card);
+    setCommentFor(saved?.comment ? "current" : null);
+    setNotice(null);
+    setAnnouncement(
+      saved
+        ? t(
+            `Zurück: ${last.card.title}. Deine Bewertung: ${verdictLabel(t, saved.verdict)}${saved.comment ? " (mit Kommentar)" : ""} – bleibt gespeichert, bis du neu bewertest.`,
+            `Back: ${last.card.title}. Your vote: ${verdictLabel(t, saved.verdict)}${saved.comment ? " (with comment)" : ""} – it stays saved until you vote again.`,
+          )
+        : t(`Zurück: ${last.card.title}.`, `Back: ${last.card.title}.`),
+    );
   };
 
   // A comment for the card on top (sent with the verdict) or for the last vote (sent at once).
@@ -216,26 +250,32 @@ export function Voter(props: Props) {
     if (target === "last") {
       const last = history[history.length - 1];
       if (!last) return;
-      setComment(last.comment);
-    } else if (commentFor === "last") setComment("");
+      setLastText(last.comment);
+    }
     setCommentFor(target);
     requestAnimationFrame(() => commentField.current?.focus());
   };
   const saveLastComment = () => {
     const last = history[history.length - 1];
     if (!last) return;
-    const text = comment.trim();
+    const text = lastText.trim();
     mine.current.set(imageKey(last.card), { verdict: last.verdict, comment: text });
     queue.current?.push({ scene: last.card.scene, variant: last.card.variant, hash: last.card.hash, action: "set", verdict: last.verdict, comment: text });
     setHistory((h) => [...h.slice(0, -1), { ...last, comment: text }]);
-    setComment("");
+    setLastText("");
     setCommentFor(null);
     setAnnouncement(t("Kommentar gespeichert.", "Comment saved."));
   };
+  // Closing keeps the draft of the card on top: it still goes with the verdict.
   const closeComment = () => {
-    if (commentFor === "last") setComment("");
+    if (commentFor === "last") setLastText("");
     setCommentFor(null);
     stack.current?.focus();
+  };
+  const editComment = (text: string) => {
+    if (commentFor === "last") return setLastText(text);
+    const c = cards[indexRef.current];
+    if (c) setDraft({ key: imageKey(c), text });
   };
 
   const openImage = () => {
@@ -260,7 +300,7 @@ export function Voter(props: Props) {
       // Esc leaves the field; the comment stays and goes with the next verdict (an empty one closes).
       if (e.key === "Escape" && e.target === commentField.current) {
         e.preventDefault();
-        if (!comment.trim()) closeComment();
+        if (!panelText.trim()) closeComment();
         else stack.current?.focus();
       }
       return;
@@ -287,10 +327,11 @@ export function Voter(props: Props) {
       case "C":
         e.preventDefault();
         return openComment("current");
+      case "ArrowLeft":
       case "z":
       case "Z":
         e.preventDefault();
-        return undo();
+        return back();
       case "Enter":
         if (onControl) return;
         e.preventDefault();
@@ -370,7 +411,10 @@ export function Voter(props: Props) {
   const visible = useMemo(() => cards.slice(index, index + 3), [cards, index]);
   const lastEntry = history[history.length - 1];
   const percent = total ? Math.round((done / total) * 100) : 100;
-  const current = card ? mine.current.get(imageKey(card)) ?? card.vote : null;
+  const current = card ? savedOf(card) : null;
+  const panelText = commentFor === "last" ? lastText : card ? draftOf(card) : "";
+  // A draft waiting behind the closed panel: the comment button shows it.
+  const hasDraft = !commentFor && !!card && !!draftOf(card).trim();
 
   return (
     <div className="voter">
@@ -557,12 +601,12 @@ export function Voter(props: Props) {
             ref={commentField}
             rows={2}
             maxLength={500}
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
+            value={panelText}
+            onChange={(e) => editComment(e.target.value)}
             placeholder={t("Was fällt dir auf? (optional, kurz)", "What do you notice? (optional, short)")}
           />
           <div className="comment-actions">
-            <span className="muted small">{comment.length} / 500</span>
+            <span className="muted small">{panelText.length} / 500</span>
             <span className="spacer" />
             <button type="button" className="button small ghost" onClick={closeComment}>
               {commentFor === "last" ? t("Abbrechen", "Cancel") : t("Schließen", "Close")}
@@ -577,8 +621,8 @@ export function Voter(props: Props) {
       )}
 
       <div className="actions" role="group" aria-label={t("Bewertung", "Vote")}>
-        <ActButton kind="undo" onClick={undo} disabled={!history.length} name={t("Letzte Bewertung rückgängig (Z)", "Undo last vote (Z)")} title={t("Rückgängig (Z)", "Undo (Z)")} label={t("Rückgängig", "Undo")} keyCap="Z">
-          <UndoIcon />
+        <ActButton kind="back" onClick={back} disabled={!history.length || loading} name={t("Zurück zur vorigen Karte (Pfeil links oder Z)", "Back to the previous card (left arrow or Z)")} title={t("Zurück (← oder Z)", "Back (← or Z)")} label={t("Zurück", "Back")} keyCap="←">
+          <BackIcon />
         </ActButton>
         <ActButton kind="nope" onClick={() => vote("down")} disabled={!card || loading} name={t("Gefällt nicht (Pfeil runter oder J)", "Don't like (down arrow or J)")} title={t("Gefällt nicht (↓ oder J)", "Don't like (↓ or J)")} label={t("Gefällt nicht", "Don't like")} keyCap="↓">
           <span aria-hidden="true">👎</span>
@@ -590,16 +634,17 @@ export function Voter(props: Props) {
           <span aria-hidden="true">👍</span>
         </ActButton>
         <ActButton
-          kind={`comment${commentFor ? " active" : ""}`}
+          kind={`comment${commentFor ? " active" : ""}${hasDraft ? " draft" : ""}`}
           onClick={() => (commentFor ? closeComment() : openComment(card ? "current" : "last"))}
           disabled={!card && !lastEntry}
           expanded={!!commentFor}
-          name={t("Kommentar (C)", "Comment (C)")}
-          title={t("Kommentar (C)", "Comment (C)")}
+          name={hasDraft ? t("Kommentar (Entwurf) (C)", "Comment (draft) (C)") : t("Kommentar (C)", "Comment (C)")}
+          title={hasDraft ? t("Kommentar (C) – Entwurf, wird mit deiner Bewertung gespeichert", "Comment (C) – draft, saved with your vote") : t("Kommentar (C)", "Comment (C)")}
           label={t("Kommentar", "Comment")}
           keyCap="C"
         >
           <CommentIcon />
+          {hasDraft && <span className="draft-dot" />}
         </ActButton>
       </div>
 

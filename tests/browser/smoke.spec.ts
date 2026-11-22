@@ -1,5 +1,6 @@
 // Smoke test in a real browser: the guide on the first visit, the labelled
-// buttons; vote with keys, buttons and a mouse swipe, comment, undo, the full
+// buttons; vote with keys, buttons and a mouse swipe, comment (a draft goes
+// with its card only), back (the vote stays saved until re-voted), the full
 // image and the help (button and `?`); "My votes"; the admin API with
 // its token; no access for a login that is not on the list. No GitHub: the
 // session comes straight from the database.
@@ -25,8 +26,15 @@ const title = (page: Page) => page.locator(".vote-card.depth-0 h2");
 const count = (page: Page) => page.locator(".progress-count");
 // Waits until every queued vote reached the server.
 const settled = (page: Page) => expect(page.locator(".sync-state")).toHaveCount(0);
+// What the server has: the whole deck with this person's vote on each card.
+async function saved(page: Page) {
+  await settled(page);
+  const all = (await (await page.request.get("/api/deck?all=1")).json()) as { cards: { title: string; variant: string; vote: { verdict: string; comment: string } | null }[] };
+  const open = (await (await page.request.get("/api/deck")).json()) as { cards: unknown[] };
+  return { votes: all.cards.filter((c) => c.vote), open: open.cards.length };
+}
 
-test("vote with keys, buttons and a swipe; comment; undo; my votes; admin API", async ({ browser, baseURL, request }) => {
+test("vote with keys, buttons and a swipe; comment draft; back; my votes; admin API", async ({ browser, baseURL, request }) => {
   const { voter } = seed();
   const context = await browser.newContext({ locale: "en-GB", viewport: { width: 1280, height: 860 } });
   await signedIn(context, voter, baseURL!);
@@ -49,7 +57,7 @@ test("vote with keys, buttons and a swipe; comment; undo; my votes; admin API", 
   await expect(guide).toBeHidden();
   // Every button has a visible label and its key cap (desktop).
   const actions = page.getByRole("group", { name: "Vote" });
-  for (const [name, label, key] of [["Undo last vote (Z)", "Undo", "Z"], ["Don't like (down arrow or J)", "Don't like", "↓"], ["Skip (right arrow or L)", "Skip", "→"], ["Like (up arrow or K)", "Like", "↑"], ["Comment (C)", "Comment", "C"]]) {
+  for (const [name, label, key] of [["Back to the previous card (left arrow or Z)", "Back", "←"], ["Don't like (down arrow or J)", "Don't like", "↓"], ["Skip (right arrow or L)", "Skip", "→"], ["Like (up arrow or K)", "Like", "↑"], ["Comment (C)", "Comment", "C"]]) {
     const button = actions.getByRole("button", { name, exact: true });
     await expect(button.locator(".act-text")).toHaveText(label);
     await expect(button.locator(".act-text")).toBeVisible();
@@ -77,13 +85,15 @@ test("vote with keys, buttons and a swipe; comment; undo; my votes; admin API", 
   const third = { title: await title(page).innerText(), variant: await variant.innerText() };
   await page.keyboard.press("ArrowRight");
   await expect(count(page)).toHaveText("4 / 12");
-  // Z undoes the skip.
+  // Z goes back to the skipped card: the skip is shown and stays saved.
   await page.keyboard.press("z");
   await expect(count(page)).toHaveText("3 / 12");
   await expect(title(page)).toHaveText(third.title);
   await expect(variant).toHaveText(third.variant);
+  await expect(page.locator(".vote-card.depth-0 .chip.verdict")).toHaveText("Your vote: skipped");
+  expect((await saved(page)).votes).toHaveLength(3);
 
-  // C: a comment, sent with the next verdict (the button).
+  // C: a comment, sent with the next verdict (the button) – replacing the skip.
   await page.keyboard.press("c");
   const field = page.getByRole("textbox", { name: /Comment/ });
   await expect(field).toBeFocused();
@@ -93,6 +103,67 @@ test("vote with keys, buttons and a swipe; comment; undo; my votes; admin API", 
   await page.getByRole("button", { name: "Don't like (down arrow or J)" }).click();
   await expect(field).toHaveCount(0);
   await expect(count(page)).toHaveText("4 / 12");
+
+  // A draft behind the closed panel (#439): the button shows it, it goes with
+  // the vote, and the next card starts empty.
+  const fourth = { title: await title(page).innerText(), variant: await variant.innerText() };
+  const commentButton = actions.getByRole("button", { name: "Comment (C)", exact: true });
+  await commentButton.click();
+  await field.fill("Too much padding");
+  await page.locator(".comment-panel").getByRole("button", { name: "Close" }).click();
+  await expect(field).toHaveCount(0);
+  const draftButton = actions.getByRole("button", { name: "Comment (draft) (C)", exact: true });
+  await expect(draftButton).toBeVisible();
+  await expect(draftButton.locator(".draft-dot")).toBeVisible();
+  await page.keyboard.press("ArrowDown");
+  await expect(count(page)).toHaveText("5 / 12");
+  await expect(page.getByRole("status").filter({ hasText: `Dislike: ${fourth.title} (with comment)` })).toHaveCount(1);
+  await expect(page.locator(".last-vote")).toContainText("„Too much padding“");
+  await expect(commentButton).toBeVisible();
+  await expect(commentButton.locator(".draft-dot")).toHaveCount(0);
+  await page.keyboard.press("c");
+  await expect(field).toBeFocused();
+  await expect(field).toHaveValue("");
+  await page.keyboard.press("Escape");
+  await expect(field).toHaveCount(0);
+  let server = await saved(page);
+  expect(server.votes).toHaveLength(4);
+  expect(server.votes.filter((c) => c.vote!.comment === "Too much padding" && c.vote!.verdict === "down")).toHaveLength(1);
+  expect(server.votes.filter((c) => c.vote!.comment === "The tab bar is cut off" && c.vote!.verdict === "down")).toHaveLength(1);
+
+  // ← walks back: the fourth card with its vote and comment, then the third –
+  // nothing is deleted on the server.
+  await page.keyboard.press("ArrowLeft");
+  await expect(count(page)).toHaveText("4 / 12");
+  await expect(title(page)).toHaveText(fourth.title);
+  await expect(variant).toHaveText(fourth.variant);
+  await expect(page.locator(".vote-card.depth-0 .chip.verdict")).toHaveText("Your vote: 👎");
+  await expect(field).toHaveValue("Too much padding");
+  await expect(page.getByRole("status").filter({ hasText: `Back: ${fourth.title}. Your vote: Dislike (with comment)` })).toHaveCount(1);
+  await page.keyboard.press("ArrowLeft");
+  await expect(count(page)).toHaveText("3 / 12");
+  await expect(title(page)).toHaveText(third.title);
+  await expect(field).toHaveValue("The tab bar is cut off");
+  server = await saved(page);
+  expect(server.votes).toHaveLength(4);
+  expect(server.open).toBe(8);
+  // Forward only by voting: the same verdict and comment again, then the fourth
+  // card comes with its comment; a changed verdict and comment replace the old.
+  await page.keyboard.press("ArrowDown");
+  await expect(count(page)).toHaveText("4 / 12");
+  await expect(title(page)).toHaveText(fourth.title);
+  await expect(field).toHaveValue("Too much padding");
+  await field.fill("Too much padding at the top");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("ArrowUp");
+  await expect(count(page)).toHaveText("5 / 12");
+  await expect(field).toHaveCount(0);
+  server = await saved(page);
+  expect(server.votes).toHaveLength(4);
+  expect(server.open).toBe(8);
+  expect(server.votes.filter((c) => c.title === fourth.title && c.vote!.verdict === "up" && c.vote!.comment === "Too much padding at the top")).toHaveLength(1);
+  expect(server.votes.filter((c) => c.vote!.comment === "Too much padding")).toHaveLength(0);
+  expect(server.votes.filter((c) => c.vote!.comment === "The tab bar is cut off" && c.vote!.verdict === "down")).toHaveLength(1);
 
   // Swipe right with the mouse: the card tilts and shows the stamp, then goes.
   const card = page.locator(".vote-card.depth-0");
@@ -104,7 +175,7 @@ test("vote with keys, buttons and a swipe; comment; undo; my votes; admin API", 
   expect(Number(await card.evaluate((el) => el.style.getPropertyValue("--drag-like")))).toBeGreaterThan(0.3);
   await page.mouse.move(box.x + box.width / 2 + 420, box.y + box.height / 2 + 10, { steps: 6 });
   await page.mouse.up();
-  await expect(count(page)).toHaveText("5 / 12");
+  await expect(count(page)).toHaveText("6 / 12");
   // A short drag springs back.
   const next = await title(page).innerText();
   const box2 = (await card.boundingBox())!;
@@ -112,8 +183,16 @@ test("vote with keys, buttons and a swipe; comment; undo; my votes; admin API", 
   await page.mouse.down();
   await page.mouse.move(box2.x + 240, box2.y + 200, { steps: 3 });
   await page.mouse.up();
-  await expect(count(page)).toHaveText("5 / 12");
+  await expect(count(page)).toHaveText("6 / 12");
   await expect(title(page)).toHaveText(next);
+  // Back while the card is still flying out: it comes back to rest, in view.
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowLeft");
+  await expect(count(page)).toHaveText("6 / 12");
+  await expect(title(page)).toHaveText(next);
+  await expect(card).not.toHaveClass(/flying/);
+  await expect(card).toBeInViewport({ ratio: 0.9 });
+  await expect(page.locator(".vote-card.depth-0 .chip.verdict")).toHaveText("Your vote: skipped");
 
   // Enter: the full image; ?: the help.
   await page.locator("body").focus();
@@ -129,15 +208,15 @@ test("vote with keys, buttons and a swipe; comment; undo; my votes; admin API", 
 
   // A comment after the verdict.
   await page.getByRole("button", { name: "Like (up arrow or K)" }).click();
-  await expect(count(page)).toHaveText("6 / 12");
+  await expect(count(page)).toHaveText("7 / 12");
   await page.getByRole("button", { name: "Add a comment" }).click();
   await page.getByRole("textbox", { name: /Comment on your last vote/ }).fill("Looks great");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await settled(page);
 
-  // A reload keeps the deck: five images voted on.
+  // A reload keeps the deck: six images voted on.
   await page.reload();
-  await expect(count(page)).toHaveText("6 / 12");
+  await expect(count(page)).toHaveText("7 / 12");
   // Filters: only phone-dark, then everything with "show all".
   await page.getByText("Filter", { exact: true }).click();
   await page.getByLabel("Variant").selectOption("phone-dark");
@@ -146,10 +225,10 @@ test("vote with keys, buttons and a swipe; comment; undo; my votes; admin API", 
   await expect(count(page)).toHaveText("1 / 3");
   await page.getByLabel("Variant").selectOption("");
   await page.getByRole("switch", { name: /Show all/ }).uncheck();
-  await expect(count(page)).toHaveText("6 / 12");
+  await expect(count(page)).toHaveText("7 / 12");
 
   // Vote the rest: the empty state.
-  for (let i = 0; i < 7; i++) await page.keyboard.press("ArrowRight");
+  for (let i = 0; i < 6; i++) await page.keyboard.press("ArrowRight");
   await expect(page.getByRole("heading", { name: "All done – the next gallery arrives tonight" })).toBeVisible();
   await settled(page);
 
@@ -197,7 +276,7 @@ test("on a phone: guide once, labels instead of key caps, no overflow", async ({
   await page.keyboard.press("Escape");
   await expect(guide).toBeHidden();
   const actions = page.getByRole("group", { name: "Bewertung" });
-  for (const label of ["Rückgängig", "Gefällt nicht", "Überspringen", "Gefällt mir", "Kommentar"]) await expect(actions.locator(".act-text").getByText(label, { exact: true })).toBeVisible();
+  for (const label of ["Zurück", "Gefällt nicht", "Überspringen", "Gefällt mir", "Kommentar"]) await expect(actions.locator(".act-text").getByText(label, { exact: true })).toBeVisible();
   await expect(actions.locator("kbd").first()).toBeHidden();
   // The labels fit: nothing wider than its button, no horizontal scroll.
   const clipped = await actions.locator(".act-button").evaluateAll((buttons) => buttons.filter((b) => b.querySelector(".act-label")!.scrollWidth > b.clientWidth + 1).length);

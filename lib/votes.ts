@@ -94,7 +94,7 @@ export function deck(user: { id: number }, g: Gallery, filter: DeckFilter = {}):
     });
   }
   // A random order per person and gallery run instead of the gallery's
-  // order: stable across reloads and undo (keyed, not Math.random), new for
+  // order: stable across reloads and going back (keyed, not Math.random), new for
   // every nightly run and different for every person.
   const rank = (c: Card) => hmac("deck", `${user.id}\u0000${g.generated}\u0000${shotKey(c)}\u0000${c.hash}`);
   return cards.map((c) => [rank(c), c] as const).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).map(([, c]) => c);
@@ -114,7 +114,7 @@ const bounded = (v: unknown, name: string, max: number) => {
 };
 
 // Sets this person's verdict on one image (replacing an earlier one on the
-// same image). Answers the vote and what it replaced, for "undo".
+// same image). Answers the vote and what it replaced.
 export async function castVote(user: SessionUser, input: Record<string, unknown>) {
   const scene = bounded(input.scene, "scene", 200);
   const variant = bounded(input.variant, "variant", 50);
@@ -150,7 +150,7 @@ export async function castVote(user: SessionUser, input: Record<string, unknown>
   });
 }
 
-// Removes this person's vote on one image (undo of a first vote).
+// Removes this person's vote on one image (DELETE /api/votes, see routes.ts).
 export function removeVoteOn(user: SessionUser, input: Record<string, unknown>) {
   const scene = bounded(input.scene, "scene", 200);
   const variant = bounded(input.variant, "variant", 50);

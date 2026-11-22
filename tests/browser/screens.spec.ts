@@ -71,13 +71,23 @@ test("voting screen and pages at desktop and phone size, light and dark", async 
       await page.locator("#vote-comment").fill(colorScheme === "light" ? "Die Tab-Leiste ist abgeschnitten." : "The tab bar is cut off.");
       await page.waitForTimeout(350);
       await shot("vote-comment");
-      await page.getByRole("button", { name: /^(Schließen|Close)$/ }).first().click();
+      // Closed with the text in it: the comment button shows the draft (#439).
+      await page.locator(".comment-panel").getByRole("button", { name: /^(Schließen|Close)$/ }).click();
+      await expect(page.locator(".act-button.comment .draft-dot")).toBeVisible();
+      await shot("vote-draft");
+      await page.locator(".actions").screenshot({ path: join(dir!, `actions-draft-${viewport.name}-${colorScheme}.png`) });
+      // Voted with the draft, then back: the verdict on the card, the comment loaded.
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("ArrowLeft");
+      await expect(page.locator(".vote-card.depth-0 .chip.verdict")).toBeVisible();
+      await page.waitForTimeout(350);
+      await shot("vote-back");
 
       await page.keyboard.press("?");
       await shot("help");
       await page.keyboard.press("Escape");
 
-      // Everything voted: the empty state; then undo it all again.
+      // Everything voted: the empty state.
       for (let i = 0; i < 10; i++) await page.keyboard.press("ArrowRight");
       await expect(page.locator(".done-state")).toBeVisible();
       await page.waitForTimeout(300);

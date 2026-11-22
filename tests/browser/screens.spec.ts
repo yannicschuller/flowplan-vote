@@ -64,10 +64,10 @@ test("voting screen and pages at desktop and phone size, light and dark", async 
       });
 
       // A comment open, a phone-sized card on top.
-      await page.keyboard.press("ArrowDown");
-      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("ArrowRight");
+      await page.keyboard.press("ArrowRight");
       await expect(page.locator(".progress-count")).toContainText("3");
-      await page.getByRole("button", { name: /Kommentar \(K\)|Comment \(K\)/ }).click();
+      await page.getByRole("button", { name: /Kommentar \(C\)|Comment \(C\)/ }).click();
       await page.locator("#vote-comment").fill(colorScheme === "light" ? "Die Tab-Leiste ist abgeschnitten." : "The tab bar is cut off.");
       await page.waitForTimeout(350);
       await shot("vote-comment");
@@ -78,7 +78,7 @@ test("voting screen and pages at desktop and phone size, light and dark", async 
       await page.keyboard.press("Escape");
 
       // Everything voted: the empty state; then undo it all again.
-      for (let i = 0; i < 10; i++) await page.keyboard.press("ArrowDown");
+      for (let i = 0; i < 10; i++) await page.keyboard.press("ArrowRight");
       await expect(page.locator(".done-state")).toBeVisible();
       await page.waitForTimeout(300);
       await shot("vote-done");

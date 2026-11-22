@@ -1,7 +1,7 @@
 "use client";
 // The voting screen: a stack of gallery screenshots, one at a time.
 // Swipe right 👍, left 👎, up to skip (pointer events: touch and mouse), or
-// use the buttons and keys (→ ← ↓, K comment, Z undo, Enter full image,
+// use the buttons and keys (↑/K like, ↓/J dislike, →/L skip, C comment, Z undo, Enter full image,
 // ? help – voter-help.tsx, which also opens by itself on the first visit). Votes go out at once through the queue (vote-queue.ts), which
 // keeps them while offline. Every position is set through CSS custom
 // properties from script – never a style attribute (CSP).
@@ -267,17 +267,24 @@ export function Voter(props: Props) {
     }
     const onControl = e.target instanceof HTMLElement && /^(BUTTON|A|SUMMARY)$/.test(e.target.tagName);
     switch (e.key) {
-      case "ArrowRight":
-        e.preventDefault();
-        return vote("up");
-      case "ArrowLeft":
-        e.preventDefault();
-        return vote("down");
-      case "ArrowDown":
-        e.preventDefault();
-        return vote("skip");
+      // Thumbs up goes up, thumbs down goes down, → moves on (#437).
+      case "ArrowUp":
       case "k":
       case "K":
+        e.preventDefault();
+        return vote("up");
+      case "ArrowDown":
+      case "j":
+      case "J":
+        e.preventDefault();
+        return vote("down");
+      case "ArrowRight":
+      case "l":
+      case "L":
+        e.preventDefault();
+        return vote("skip");
+      case "c":
+      case "C":
         e.preventDefault();
         return openComment("current");
       case "z":
@@ -573,13 +580,13 @@ export function Voter(props: Props) {
         <ActButton kind="undo" onClick={undo} disabled={!history.length} name={t("Letzte Bewertung rückgängig (Z)", "Undo last vote (Z)")} title={t("Rückgängig (Z)", "Undo (Z)")} label={t("Rückgängig", "Undo")} keyCap="Z">
           <UndoIcon />
         </ActButton>
-        <ActButton kind="nope" onClick={() => vote("down")} disabled={!card || loading} name={t("Gefällt nicht (Pfeil links)", "Don't like (left arrow)")} title={t("Gefällt nicht (←)", "Don't like (←)")} label={t("Gefällt nicht", "Don't like")} keyCap="←">
+        <ActButton kind="nope" onClick={() => vote("down")} disabled={!card || loading} name={t("Gefällt nicht (Pfeil runter oder J)", "Don't like (down arrow or J)")} title={t("Gefällt nicht (↓ oder J)", "Don't like (↓ or J)")} label={t("Gefällt nicht", "Don't like")} keyCap="↓">
           <span aria-hidden="true">👎</span>
         </ActButton>
-        <ActButton kind="skip" onClick={() => vote("skip")} disabled={!card || loading} name={t("Überspringen (Pfeil runter)", "Skip (down arrow)")} title={t("Überspringen (↓)", "Skip (↓)")} label={t("Überspringen", "Skip")} keyCap="↓">
+        <ActButton kind="skip" onClick={() => vote("skip")} disabled={!card || loading} name={t("Überspringen (Pfeil rechts oder L)", "Skip (right arrow or L)")} title={t("Überspringen (→ oder L)", "Skip (→ or L)")} label={t("Überspringen", "Skip")} keyCap="→">
           <SkipIcon />
         </ActButton>
-        <ActButton kind="like" onClick={() => vote("up")} disabled={!card || loading} name={t("Gefällt mir (Pfeil rechts)", "Like (right arrow)")} title={t("Gefällt mir (→)", "Like (→)")} label={t("Gefällt mir", "Like")} keyCap="→">
+        <ActButton kind="like" onClick={() => vote("up")} disabled={!card || loading} name={t("Gefällt mir (Pfeil hoch oder K)", "Like (up arrow or K)")} title={t("Gefällt mir (↑ oder K)", "Like (↑ or K)")} label={t("Gefällt mir", "Like")} keyCap="↑">
           <span aria-hidden="true">👍</span>
         </ActButton>
         <ActButton
@@ -587,10 +594,10 @@ export function Voter(props: Props) {
           onClick={() => (commentFor ? closeComment() : openComment(card ? "current" : "last"))}
           disabled={!card && !lastEntry}
           expanded={!!commentFor}
-          name={t("Kommentar (K)", "Comment (K)")}
-          title={t("Kommentar (K)", "Comment (K)")}
+          name={t("Kommentar (C)", "Comment (C)")}
+          title={t("Kommentar (C)", "Comment (C)")}
           label={t("Kommentar", "Comment")}
-          keyCap="K"
+          keyCap="C"
         >
           <CommentIcon />
         </ActButton>

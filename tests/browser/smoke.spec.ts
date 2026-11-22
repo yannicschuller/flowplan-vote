@@ -49,7 +49,7 @@ test("vote with keys, buttons and a swipe; comment; undo; my votes; admin API", 
   await expect(guide).toBeHidden();
   // Every button has a visible label and its key cap (desktop).
   const actions = page.getByRole("group", { name: "Vote" });
-  for (const [name, label, key] of [["Undo last vote (Z)", "Undo", "Z"], ["Don't like (left arrow)", "Don't like", "←"], ["Skip (down arrow)", "Skip", "↓"], ["Like (right arrow)", "Like", "→"], ["Comment (K)", "Comment", "K"]]) {
+  for (const [name, label, key] of [["Undo last vote (Z)", "Undo", "Z"], ["Don't like (down arrow or J)", "Don't like", "↓"], ["Skip (right arrow or L)", "Skip", "→"], ["Like (up arrow or K)", "Like", "↑"], ["Comment (C)", "Comment", "C"]]) {
     const button = actions.getByRole("button", { name, exact: true });
     await expect(button.locator(".act-text")).toHaveText(label);
     await expect(button.locator(".act-text")).toBeVisible();
@@ -68,14 +68,14 @@ test("vote with keys, buttons and a swipe; comment; undo; my votes; admin API", 
   await expect(variant).toHaveText(/^(Desktop|Phone) · (light|dark)$/);
   const first = await title(page).innerText();
 
-  // → like, ← dislike, ↓ skip.
-  await page.keyboard.press("ArrowRight");
+  // ↑ like, ↓ dislike, → skip (K, J, L too).
+  await page.keyboard.press("ArrowUp");
   await expect(count(page)).toHaveText("2 / 12");
   await expect(page.getByRole("status").filter({ hasText: `Like: ${first}` })).toHaveCount(1);
-  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("j");
   await expect(count(page)).toHaveText("3 / 12");
   const third = { title: await title(page).innerText(), variant: await variant.innerText() };
-  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowRight");
   await expect(count(page)).toHaveText("4 / 12");
   // Z undoes the skip.
   await page.keyboard.press("z");
@@ -83,14 +83,14 @@ test("vote with keys, buttons and a swipe; comment; undo; my votes; admin API", 
   await expect(title(page)).toHaveText(third.title);
   await expect(variant).toHaveText(third.variant);
 
-  // K: a comment, sent with the next verdict (the button).
-  await page.keyboard.press("k");
+  // C: a comment, sent with the next verdict (the button).
+  await page.keyboard.press("c");
   const field = page.getByRole("textbox", { name: /Comment/ });
   await expect(field).toBeFocused();
   await field.fill("The tab bar is cut off");
   await page.keyboard.press("Escape");
   await expect(field).toBeVisible();
-  await page.getByRole("button", { name: "Don't like (left arrow)" }).click();
+  await page.getByRole("button", { name: "Don't like (down arrow or J)" }).click();
   await expect(field).toHaveCount(0);
   await expect(count(page)).toHaveText("4 / 12");
 
@@ -128,7 +128,7 @@ test("vote with keys, buttons and a swipe; comment; undo; my votes; admin API", 
   await expect(guide).toBeHidden();
 
   // A comment after the verdict.
-  await page.getByRole("button", { name: "Like (right arrow)" }).click();
+  await page.getByRole("button", { name: "Like (up arrow or K)" }).click();
   await expect(count(page)).toHaveText("6 / 12");
   await page.getByRole("button", { name: "Add a comment" }).click();
   await page.getByRole("textbox", { name: /Comment on your last vote/ }).fill("Looks great");
@@ -149,7 +149,7 @@ test("vote with keys, buttons and a swipe; comment; undo; my votes; admin API", 
   await expect(count(page)).toHaveText("6 / 12");
 
   // Vote the rest: the empty state.
-  for (let i = 0; i < 7; i++) await page.keyboard.press("ArrowDown");
+  for (let i = 0; i < 7; i++) await page.keyboard.press("ArrowRight");
   await expect(page.getByRole("heading", { name: "All done – the next gallery arrives tonight" })).toBeVisible();
   await settled(page);
 

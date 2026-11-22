@@ -85,19 +85,19 @@ export function VoterHelp({ dialogRef }: { dialogRef: RefObject<HTMLDialogElemen
 
         <h3 className="help-heading">{t("Die Knöpfe", "The buttons")}</h3>
         <ul className="legend">
-          <LegendRow kind="like" icon={<span aria-hidden="true">👍</span>} name={t("Gefällt mir", "Like")} swipe={t("nach rechts wischen", "swipe right")} keyCap="→">
+          <LegendRow kind="like" icon={<span aria-hidden="true">👍</span>} name={t("Gefällt mir", "Like")} swipe={t("nach rechts wischen", "swipe right")} keyCap="↑ K">
             {t("Der Bildschirm passt so.", "This screen is fine as it is.")}
           </LegendRow>
-          <LegendRow kind="nope" icon={<span aria-hidden="true">👎</span>} name={t("Gefällt nicht", "Don't like")} swipe={t("nach links wischen", "swipe left")} keyCap="←">
+          <LegendRow kind="nope" icon={<span aria-hidden="true">👎</span>} name={t("Gefällt nicht", "Don't like")} swipe={t("nach links wischen", "swipe left")} keyCap="↓ J">
             {t("Etwas stört dich – am besten mit kurzem Kommentar, was.", "Something bothers you – best with a short comment on what.")}
           </LegendRow>
-          <LegendRow kind="skip" icon={<SkipIcon />} name={t("Überspringen", "Skip")} swipe={t("nach oben wischen", "swipe up")} keyCap="↓">
+          <LegendRow kind="skip" icon={<SkipIcon />} name={t("Überspringen", "Skip")} swipe={t("nach oben wischen", "swipe up")} keyCap="→ L">
             {t("Keine Meinung: zählt weder als 👍 noch als 👎, das Bild ist trotzdem erledigt.", "No opinion: counts as neither 👍 nor 👎, but the image is done.")}
           </LegendRow>
-          <LegendRow kind="comment" icon={<CommentIcon />} name={t("Kommentar", "Comment")} keyCap="K">
+          <LegendRow kind="comment" icon={<CommentIcon />} name={t("Kommentar", "Comment")} keyCap="C">
             {t(
-              "Schreib kurz, was dir auffällt; er wird mit deiner nächsten Bewertung gespeichert. Danach geht's mit „Kommentar nachtragen“.",
-              "Write briefly what you notice; it is saved with your next vote. Afterwards, use “Add a comment”.",
+              "Schreib kurz, was dir auffällt – er wird mit deiner nächsten Bewertung gespeichert. Schon bewertet? Unter der letzten Karte steht „Kommentar nachtragen“.",
+              "Write briefly what you notice – it is saved with your next vote. Already voted? Use “Add a comment” under the last card.",
             )}
           </LegendRow>
           <LegendRow kind="undo" icon={<UndoIcon />} name={t("Rückgängig", "Undo")} keyCap="Z">

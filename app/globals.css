@@ -1671,6 +1671,21 @@ main:has(.voter) {
   .act-label kbd {
     display: none;
   }
+  /* Six buttons with Forward (#439): Back and Forward smaller, side by side. */
+  .actions:has(.act-button.forward) .act-button:is(.back, .forward) {
+    min-width: 40px;
+  }
+  .actions:has(.act-button.forward) .act-button:is(.back, .forward) .act {
+    width: 40px;
+    height: 40px;
+    margin-block: 11px;
+  }
+  .actions:has(.act-button.forward) .act-button.back {
+    margin-right: -2px;
+  }
+  .actions:has(.act-button.forward) .act-label {
+    font-size: 10.5px;
+  }
   .button.ghost.help-button {
     padding-inline: 5px 8px;
   }

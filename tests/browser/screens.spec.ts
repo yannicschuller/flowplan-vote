@@ -82,6 +82,15 @@ test("voting screen and pages at desktop and phone size, light and dark", async 
       await expect(page.locator(".vote-card.depth-0 .chip.verdict")).toBeVisible();
       await page.waitForTimeout(350);
       await shot("vote-back");
+      // Two cards back: Forward next to Back (#439), then forward again to where we were.
+      await page.keyboard.press("ArrowLeft");
+      await expect(page.locator(".act-button.forward")).toBeVisible();
+      await page.waitForTimeout(350);
+      await shot("vote-forward");
+      await page.locator(".actions").screenshot({ path: join(dir!, `actions-forward-${viewport.name}-${colorScheme}.png`) });
+      await page.keyboard.press("x");
+      await page.keyboard.press("x");
+      await expect(page.locator(".act-button.forward")).toHaveCount(0);
 
       await page.keyboard.press("?");
       await shot("help");

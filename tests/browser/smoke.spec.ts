@@ -1,6 +1,7 @@
 // Smoke test in a real browser: the guide on the first visit, the labelled
 // buttons; vote with keys, buttons and a mouse swipe, comment (a draft goes
-// with its card only), back (the vote stays saved until re-voted), the full
+// with its card only), back (the vote stays saved until re-voted), forward
+// (votes unchanged, an edited comment saved with the same verdict), the full
 // image and the help (button and `?`); "My votes"; the admin API with
 // its token; no access for a login that is not on the list. No GitHub: the
 // session comes straight from the database.
@@ -165,6 +166,69 @@ test("vote with keys, buttons and a swipe; comment draft; back; my votes; admin 
   expect(server.votes.filter((c) => c.vote!.comment === "Too much padding")).toHaveLength(0);
   expect(server.votes.filter((c) => c.vote!.comment === "The tab bar is cut off" && c.vote!.verdict === "down")).toHaveLength(1);
 
+  // Forward (#439): only after going back. ← twice, then ⇧→ and X walk forward
+  // again with the saved votes unchanged; an edited comment is saved with the
+  // same verdict; at the first card never voted on, Forward is gone.
+  const forwardButton = actions.getByRole("button", { name: "Forward to the next card, vote unchanged (Shift+right arrow or X)", exact: true });
+  await expect(forwardButton).toHaveCount(0);
+  const fifth = await title(page).innerText();
+  await page.keyboard.press("Shift+ArrowRight");
+  await expect(count(page)).toHaveText("5 / 12");
+  await expect(title(page)).toHaveText(fifth);
+  // A draft on this card stays while going back and forward.
+  await page.keyboard.press("c");
+  await expect(field).toBeFocused();
+  await field.fill("Frontier draft");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("ArrowLeft");
+  await expect(count(page)).toHaveText("4 / 12");
+  await expect(forwardButton).toBeVisible();
+  await expect(forwardButton.locator(".act-text")).toHaveText("Forward");
+  await expect(forwardButton.locator("kbd")).toHaveText("⇧→");
+  await page.keyboard.press("ArrowLeft");
+  await expect(count(page)).toHaveText("3 / 12");
+  await expect(title(page)).toHaveText(third.title);
+  await expect(forwardButton).toBeVisible();
+  await page.keyboard.press("Shift+ArrowRight");
+  await expect(count(page)).toHaveText("4 / 12");
+  await expect(title(page)).toHaveText(fourth.title);
+  await expect(page.locator(".vote-card.depth-0 .chip.verdict")).toHaveText("Your vote: 👍");
+  await expect(field).toHaveValue("Too much padding at the top");
+  await expect(page.getByRole("status").filter({ hasText: `Forward: ${fourth.title}. Your vote: Like (with comment)` })).toHaveCount(1);
+  await expect(page.locator(".last-vote")).toContainText(`👎 ${third.title}`);
+  server = await saved(page);
+  expect(server.votes).toHaveLength(4);
+  expect(server.open).toBe(8);
+  expect(server.votes.filter((c) => c.title === third.title && c.vote!.verdict === "down" && c.vote!.comment === "The tab bar is cut off")).toHaveLength(1);
+  // The comment edited, then X: saved with the same 👍, announced.
+  await field.fill("Too much padding at the top and bottom");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("x");
+  await expect(count(page)).toHaveText("5 / 12");
+  await expect(title(page)).toHaveText(fifth);
+  await expect(forwardButton).toHaveCount(0);
+  await expect(page.getByRole("status").filter({ hasText: `Comment saved: ${fourth.title}. Forward: ${fifth}.` })).toHaveCount(1);
+  await expect(field).toHaveValue("Frontier draft");
+  server = await saved(page);
+  expect(server.votes).toHaveLength(4);
+  expect(server.open).toBe(8);
+  expect(server.votes.filter((c) => c.title === fourth.title && c.vote!.verdict === "up" && c.vote!.comment === "Too much padding at the top and bottom")).toHaveLength(1);
+  // Back once more, then the button: nothing changes on the server.
+  await page.keyboard.press("ArrowLeft");
+  await expect(count(page)).toHaveText("4 / 12");
+  await forwardButton.click();
+  await expect(count(page)).toHaveText("5 / 12");
+  await expect(forwardButton).toHaveCount(0);
+  await expect(field).toHaveValue("Frontier draft");
+  await page.keyboard.press("x");
+  await expect(count(page)).toHaveText("5 / 12");
+  server = await saved(page);
+  expect(server.votes).toHaveLength(4);
+  expect(server.votes.filter((c) => c.title === fourth.title && c.vote!.verdict === "up" && c.vote!.comment === "Too much padding at the top and bottom")).toHaveLength(1);
+  await field.fill("");
+  await page.keyboard.press("Escape");
+  await expect(field).toHaveCount(0);
+
   // Swipe right with the mouse: the card tilts and shows the stamp, then goes.
   const card = page.locator(".vote-card.depth-0");
   const box = (await card.boundingBox())!;
@@ -193,6 +257,7 @@ test("vote with keys, buttons and a swipe; comment draft; back; my votes; admin 
   await expect(card).not.toHaveClass(/flying/);
   await expect(card).toBeInViewport({ ratio: 0.9 });
   await expect(page.locator(".vote-card.depth-0 .chip.verdict")).toHaveText("Your vote: skipped");
+  await expect(forwardButton).toBeVisible();
 
   // Enter: the full image; ?: the help.
   await page.locator("body").focus();
@@ -209,6 +274,7 @@ test("vote with keys, buttons and a swipe; comment draft; back; my votes; admin 
   // A comment after the verdict.
   await page.getByRole("button", { name: "Like (up arrow or K)" }).click();
   await expect(count(page)).toHaveText("7 / 12");
+  await expect(forwardButton).toHaveCount(0);
   await page.getByRole("button", { name: "Add a comment" }).click();
   await page.getByRole("textbox", { name: /Comment on your last vote/ }).fill("Looks great");
   await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -282,8 +348,25 @@ test("on a phone: guide once, labels instead of key caps, no overflow", async ({
   const clipped = await actions.locator(".act-button").evaluateAll((buttons) => buttons.filter((b) => b.querySelector(".act-label")!.scrollWidth > b.clientWidth + 1).length);
   expect(clipped).toBe(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
+  // After Back, Forward joins the row (#439): six buttons, still all fitting.
+  const before = await page.locator(".vote-card.depth-0 h2").innerText();
+  await actions.getByRole("button", { name: /^Überspringen/ }).click();
+  await actions.getByRole("button", { name: /^Zurück/ }).click();
+  await expect(page.locator(".vote-card.depth-0 h2")).toHaveText(before);
+  await expect(actions.locator(".act-text").getByText("Vor", { exact: true })).toBeVisible();
+  await expect(actions.locator(".act-button")).toHaveCount(6);
+  const clipped2 = await actions.locator(".act-button").evaluateAll((buttons) => buttons.filter((b) => b.querySelector(".act-label")!.scrollWidth > b.clientWidth + 1).length);
+  expect(clipped2).toBe(0);
+  const row = await actions.locator(".act-button").evaluateAll((buttons) => buttons.map((b) => b.getBoundingClientRect()).map((r) => ({ top: Math.round(r.top), left: r.left, right: r.right })));
+  expect(new Set(row.map((r) => r.top)).size).toBe(1);
+  expect(Math.min(...row.map((r) => r.left))).toBeGreaterThanOrEqual(0);
+  expect(Math.max(...row.map((r) => r.right))).toBeLessThanOrEqual(390);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
+  await actions.getByRole("button", { name: /^Vor/ }).click();
+  await expect(actions.locator(".act-button")).toHaveCount(5);
   await page.reload();
-  await expect(page.locator(".vote-card.depth-0")).toBeVisible();
+  // (The last open card was skipped above: the done state now.)
+  await expect(page.locator(".vote-card.depth-0, .done-state").first()).toBeVisible();
   await page.waitForTimeout(300);
   await expect(guide).toBeHidden();
   await page.getByRole("button", { name: "Hilfe (?)" }).click();

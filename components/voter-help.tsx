@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import Link from "next/link";
 import { useT } from "./i18n";
-import { BackIcon, CommentIcon, SkipIcon, ZoomIcon } from "./vote-icons";
+import { BackIcon, CommentIcon, ForwardIcon, SkipIcon, ZoomIcon } from "./vote-icons";
 
 const SEEN_KEY = "fv_guide_seen";
 let seenThisPage = false;
@@ -104,6 +104,12 @@ export function VoterHelp({ dialogRef }: { dialogRef: RefObject<HTMLDialogElemen
             {t(
               "Zeigt die vorige Karte wieder, mit deiner Bewertung und deinem Kommentar – mehrmals drücken geht weiter zurück. Deine Bewertung bleibt gespeichert, bis du die Karte neu bewertest.",
               "Shows the previous card again, with your vote and comment – press again to go further back. Your vote stays saved until you vote on the card again.",
+            )}
+          </LegendRow>
+          <LegendRow kind="forward" icon={<ForwardIcon />} name={t("Vor", "Forward")} keyCap="⇧→ X">
+            {t(
+              "Nur nach „Zurück“: geht wieder vor, deine Bewertung bleibt, wie sie ist. Hast du den Kommentar geändert, wird er mit derselben Bewertung gespeichert.",
+              "Only after “Back”: moves forward again and leaves your vote as it is. If you changed the comment, it is saved with the same vote.",
             )}
           </LegendRow>
         </ul>

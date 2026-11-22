@@ -1,8 +1,8 @@
 "use client";
 // The voting screen: a stack of gallery screenshots, one at a time.
 // Swipe right 👍, left 👎, up to skip (pointer events: touch and mouse), or
-// use the buttons and keys (↑/K like, ↓/J dislike, →/L skip, C comment, ←/Z back, Enter full image,
-// ? help – voter-help.tsx, which also opens by itself on the first visit). Votes go out at once through the queue (vote-queue.ts), which
+// use the buttons and keys (↑/K like, ↓/J dislike, →/L skip, C comment, ←/Z back,
+// Shift+→/X forward, Enter full image, ? help – voter-help.tsx, which also opens by itself on the first visit). Votes go out at once through the queue (vote-queue.ts), which
 // keeps them while offline. Every position is set through CSS custom
 // properties from script – never a style attribute (CSP).
 //
@@ -12,12 +12,17 @@
 // Back (←/Z) only walks back through this round's history (up to 50 cards):
 // the card comes back with your verdict shown and your comment as its draft;
 // the vote stays saved until you vote on the card again, which replaces it.
+// Forward (Shift+→/X, only while there are cards you went back over) walks
+// those again without a request – unless you changed the comment: then it is
+// saved with the same verdict. Voting on such a card replaces the vote and
+// moves forward too; at the first card you never voted on, Forward is gone.
+// Each card keeps its own draft meanwhile (also the one you went back from).
 // The "last vote" comment (commentFor "last") has its own text and never
 // touches the draft.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useT } from "./i18n";
-import { BackIcon, CommentIcon, DeviceIcon, FilterIcon, SkipIcon, ZoomIcon } from "./vote-icons";
+import { BackIcon, CommentIcon, DeviceIcon, FilterIcon, ForwardIcon, SkipIcon, ZoomIcon } from "./vote-icons";
 import { VoterHelp } from "./voter-help";
 import { VoteQueue, imageKey, type QueueState } from "./vote-queue";
 import { variantLabel, variantParts, verdictLabel } from "@/lib/labels";
@@ -57,11 +62,20 @@ export function Voter(props: Props) {
   };
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+  // The cards you went back over, the one on top last (its index is the current one).
+  const [ahead, setAhead] = useState<HistoryEntry[]>([]);
   // What this person has on each image (from the server, then as changed here).
   const mine = useRef(new Map<string, Mine>());
-  // The draft for the card on top, keyed by its image; for any other key the
-  // card's saved comment counts (see draftOf).
-  const [draft, setDraft] = useState({ key: "", text: "" });
+  // Comment drafts, keyed by image; a card without one shows its saved comment
+  // (see draftOf). An empty entry is a draft used up by the vote.
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const setDraft = (key: string, text: string | null) =>
+    setDrafts((d) => {
+      const next = { ...d };
+      if (text === null) delete next[key];
+      else next[key] = text;
+      return next;
+    });
   // The text while editing the comment of the last vote.
   const [lastText, setLastText] = useState("");
   const [commentFor, setCommentFor] = useState<"current" | "last" | null>(null);
@@ -128,7 +142,8 @@ export function Voter(props: Props) {
       setTotal(next.all ? body.cards.length : body.progress?.total ?? body.cards.length);
       setIndex(0);
       setHistory([]);
-      setDraft({ key: "", text: "" });
+      setAhead([]);
+      setDrafts({});
       setCommentFor((f) => (f === "last" ? null : f));
     } catch (error) {
       setNotice({ kind: "err", text: errorMessage((error as Error).message, t) });
@@ -173,7 +188,18 @@ export function Voter(props: Props) {
     const key = imageKey(c);
     return mine.current.has(key) ? mine.current.get(key)! : c.vote;
   };
-  const draftOf = (c: Card) => (draft.key === imageKey(c) ? draft.text : savedOf(c)?.comment ?? "");
+  const draftOf = (c: Card) => drafts[imageKey(c)] ?? savedOf(c)?.comment ?? "";
+  // For the announcements: your vote on a card you have seen before.
+  const savedNote = (c: Card) => {
+    const saved = savedOf(c);
+    if (!saved) return "";
+    return t(
+      ` Deine Bewertung: ${verdictLabel(t, saved.verdict)}${saved.comment ? " (mit Kommentar)" : ""} – bleibt gespeichert, bis du neu bewertest.`,
+      ` Your vote: ${verdictLabel(t, saved.verdict)}${saved.comment ? " (with comment)" : ""} – it stays saved until you vote again.`,
+    );
+  };
+  const nextNote = (next: Card, revisited: boolean) =>
+    `${t("Nächstes", "Next")}: ${next.title}, ${variantLabel(t, next.variant)}.${revisited ? savedNote(next) : ""}`;
 
   const vote = (verdict: Verdict) => {
     finishFlight();
@@ -186,16 +212,18 @@ export function Voter(props: Props) {
     mine.current.set(key, { verdict, comment: text });
     queue.current?.push({ scene: c.scene, variant: c.variant, hash: c.hash, action: "set", verdict, comment: text });
     setHistory((h) => [...h.slice(-49), { index: i, card: c, verdict, comment: text }]);
+    // A card you went back over: voted again, it is no longer ahead.
+    setAhead((a) => (a[a.length - 1]?.index === i ? a.slice(0, -1) : a));
     const next = cards[i + 1];
     // The draft is used up (also while the card flies out); the next card starts
-    // without the old text – one seen before (after Back) shows its own comment.
-    setDraft({ key, text: "" });
-    setCommentFor(next && savedOf(next)?.comment ? "current" : null);
+    // with its own draft or saved comment, never the old text.
+    setDraft(key, "");
+    setCommentFor(next && draftOf(next) ? "current" : null);
     setLastText("");
     setNotice(null);
     setAnnouncement(
       `${verdictLabel(t, verdict)}: ${c.title}${text ? ` (${t("mit Kommentar", "with comment")})` : ""}. ` +
-        (next ? `${t("Nächstes", "Next")}: ${next.title}, ${variantLabel(t, next.variant)}.` : t("Alles bewertet.", "All done.")),
+        (next ? nextNote(next, ahead.length > 1 && ahead[ahead.length - 1]?.index === i) : t("Alles bewertet.", "All done.")),
     );
     const advance = () => {
       const el = topCard.current;
@@ -228,19 +256,45 @@ export function Voter(props: Props) {
     el?.classList.remove("dragging", "settling", "flying", "fly-right", "fly-left", "fly-up");
     setVars(el, 0, 0);
     setHistory((h) => h.slice(0, -1));
+    setAhead((a) => [...a, last]);
     setIndex(last.index);
-    setDraft({ key: "", text: "" });
+    // The card comes back with its saved comment; other cards keep their drafts.
+    setDraft(imageKey(last.card), null);
     setLastText("");
     const saved = savedOf(last.card);
     setCommentFor(saved?.comment ? "current" : null);
     setNotice(null);
+    setAnnouncement(`${t("Zurück", "Back")}: ${last.card.title}.${savedNote(last.card)}`);
+  };
+
+  // Forward: the next card you went back over, its vote unchanged (nothing is
+  // sent) – unless you edited its comment: that is saved with the same verdict.
+  const forward = () => {
+    finishFlight();
+    const i = indexRef.current;
+    const entry = ahead[ahead.length - 1];
+    const c = cards[i];
+    if (!entry || !c || entry.index !== i || loading) return;
+    const key = imageKey(c);
+    const saved = savedOf(c);
+    const verdict = saved?.verdict ?? entry.verdict;
+    const text = draftOf(c).trim();
+    const changed = text !== (saved?.comment ?? "");
+    if (changed) {
+      mine.current.set(key, { verdict, comment: text });
+      queue.current?.push({ scene: c.scene, variant: c.variant, hash: c.hash, action: "set", verdict, comment: text });
+    }
+    setHistory((h) => [...h.slice(-49), { index: i, card: c, verdict, comment: text }]);
+    setAhead((a) => a.slice(0, -1));
+    setIndex(i + 1);
+    const next = cards[i + 1];
+    setDraft(key, null);
+    setCommentFor(next && draftOf(next) ? "current" : null);
+    setLastText("");
+    setNotice(null);
     setAnnouncement(
-      saved
-        ? t(
-            `Zurück: ${last.card.title}. Deine Bewertung: ${verdictLabel(t, saved.verdict)}${saved.comment ? " (mit Kommentar)" : ""} – bleibt gespeichert, bis du neu bewertest.`,
-            `Back: ${last.card.title}. Your vote: ${verdictLabel(t, saved.verdict)}${saved.comment ? " (with comment)" : ""} – it stays saved until you vote again.`,
-          )
-        : t(`Zurück: ${last.card.title}.`, `Back: ${last.card.title}.`),
+      (changed ? `${t("Kommentar gespeichert", "Comment saved")}: ${c.title}. ` : "") +
+        (next ? `${t("Vor", "Forward")}: ${next.title}.${savedNote(next)}` : t("Alles bewertet.", "All done.")),
     );
   };
 
@@ -275,7 +329,7 @@ export function Voter(props: Props) {
   const editComment = (text: string) => {
     if (commentFor === "last") return setLastText(text);
     const c = cards[indexRef.current];
-    if (c) setDraft({ key: imageKey(c), text });
+    if (c) setDraft(imageKey(c), text);
   };
 
   const openImage = () => {
@@ -322,7 +376,11 @@ export function Voter(props: Props) {
       case "l":
       case "L":
         e.preventDefault();
-        return vote("skip");
+        return e.key === "ArrowRight" && e.shiftKey ? forward() : vote("skip");
+      case "x":
+      case "X":
+        e.preventDefault();
+        return forward();
       case "c":
       case "C":
         e.preventDefault();
@@ -410,6 +468,9 @@ export function Voter(props: Props) {
 
   const visible = useMemo(() => cards.slice(index, index + 3), [cards, index]);
   const lastEntry = history[history.length - 1];
+  // Cards you went back over (the one on top is the first of them; also while
+  // a revisited card flies out, so the row does not jump).
+  const canForward = ahead.length > 0;
   const percent = total ? Math.round((done / total) * 100) : 100;
   const current = card ? savedOf(card) : null;
   const panelText = commentFor === "last" ? lastText : card ? draftOf(card) : "";
@@ -624,6 +685,11 @@ export function Voter(props: Props) {
         <ActButton kind="back" onClick={back} disabled={!history.length || loading} name={t("Zurück zur vorigen Karte (Pfeil links oder Z)", "Back to the previous card (left arrow or Z)")} title={t("Zurück (← oder Z)", "Back (← or Z)")} label={t("Zurück", "Back")} keyCap="←">
           <BackIcon />
         </ActButton>
+        {canForward && (
+          <ActButton kind="forward" onClick={forward} disabled={loading} name={t("Vor zur nächsten Karte, Bewertung bleibt (Umschalt+Pfeil rechts oder X)", "Forward to the next card, vote unchanged (Shift+right arrow or X)")} title={t("Vor (⇧→ oder X) – deine Bewertung bleibt", "Forward (⇧→ or X) – your vote stays")} label={t("Vor", "Forward")} keyCap="⇧→">
+            <ForwardIcon />
+          </ActButton>
+        )}
         <ActButton kind="nope" onClick={() => vote("down")} disabled={!card || loading} name={t("Gefällt nicht (Pfeil runter oder J)", "Don't like (down arrow or J)")} title={t("Gefällt nicht (↓ oder J)", "Don't like (↓ or J)")} label={t("Gefällt nicht", "Don't like")} keyCap="↓">
           <span aria-hidden="true">👎</span>
         </ActButton>

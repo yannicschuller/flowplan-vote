@@ -10,6 +10,12 @@ export const BackIcon = () => (
     <path d="m11 18-6-6 6-6" />
   </Svg>
 );
+export const ForwardIcon = () => (
+  <Svg>
+    <path d="M5 12h14" />
+    <path d="m13 6 6 6-6 6" />
+  </Svg>
+);
 export const SkipIcon = () => (
   <Svg>
     <path d="m6 15 6-6 6 6" />

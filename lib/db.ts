@@ -55,6 +55,18 @@ export const MIGRATIONS: string[] = [
   `ALTER TABLE votes ADD COLUMN dismissed_at INTEGER;
    ALTER TABLE votes ADD COLUMN dismissed_by TEXT;
    CREATE INDEX votes_dismissed ON votes(dismissed_at) WHERE dismissed_at IS NOT NULL;`,
+  // 3: a scene's handling status, set by the maintainer (admin API): 'done'
+  // (the feedback was worked on) or 'declined' (won't be changed), with an
+  // optional note. No row = open. The prompt leaves a marked scene out
+  // unless votes came in after marked_at. marked_by is the admin's
+  // identifier as flowplan-admin sends it.
+  `CREATE TABLE scene_status (
+     scene TEXT PRIMARY KEY,
+     status TEXT NOT NULL CHECK (status IN ('done','declined')),
+     note TEXT NOT NULL DEFAULT '',
+     marked_at INTEGER NOT NULL,
+     marked_by TEXT NOT NULL DEFAULT ''
+   );`,
 ];
 export const SCHEMA_VERSION = MIGRATIONS.length;
 

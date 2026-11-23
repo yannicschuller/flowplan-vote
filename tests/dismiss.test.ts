@@ -184,8 +184,7 @@ test("migration 2 adds the dismiss columns to an existing database, votes keep c
   conn.exec(`INSERT INTO votes(user_id,scene,grp,title,variant,hash,gallery_generated,"commit",version,verdict,comment,created_at)
              VALUES(1,'home','Pages','Home','desktop-light','h','g','c','1','down','',1)`);
   migrate(conn);
-  assert.equal(SCHEMA_VERSION, 2);
-  assert.equal((conn.prepare("SELECT version FROM schema_version").get() as { version: number }).version, 2);
+  assert.equal((conn.prepare("SELECT version FROM schema_version").get() as { version: number }).version, SCHEMA_VERSION);
   const row = conn.prepare("SELECT dismissed_at, dismissed_by FROM votes").get() as Record<string, unknown>;
   assert.deepEqual({ ...row }, { dismissed_at: null, dismissed_by: null });
   conn.close();

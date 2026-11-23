@@ -2,7 +2,8 @@ import { handle } from "@/lib/http";
 import { adminRoute } from "@/lib/routes";
 
 // GET /api/admin/summary | votes | voters | scenes | prompt | export,
-// POST /api/admin/votes/<id>/dismiss|restore, /api/admin/voters/<user>/dismiss|restore
+// POST /api/admin/votes/<id>/dismiss|restore, /api/admin/voters/<user>/dismiss|restore,
+// /api/admin/scenes/<scene>/status, /api/admin/scenes/status
 // (README "Admin API").
 export const dynamic = "force-dynamic";
 type Ctx = { params: Promise<{ path: string[] }> };

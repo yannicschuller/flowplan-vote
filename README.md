@@ -51,7 +51,9 @@ In both modes the logins in `VOTE_BLOCKED_LOGINS` (comma-separated, case-insensi
 
 ## Admin API
 
-For flowplan-admin (server to server): every request needs `Authorization: Bearer <VOTE_ADMIN_TOKEN>`, compared in constant time. Without a token configured (or with one shorter than 24 characters) every path answers **404**; a missing or wrong token answers **401** (rate-limited per hashed address). JSON, no CORS headers, `Cache-Control: no-store`. Times in answers are ISO 8601 strings (`createdAt`, `lastVoteAt`, `latestVoteAt`, `galleryGenerated`, `dismissedAt`); the `since` parameter is milliseconds since 1970. The reads are `GET` (another method answers 405); the dismiss and restore actions are `POST` with a JSON body (at most 4 KB). Errors are `{ "error": "<code>", "message": "…" }`.
+For flowplan-admin (server to server): every request needs `Authorization: Bearer <VOTE_ADMIN_TOKEN>`, compared in constant time. Without a token configured (or with one shorter than 24 characters) every path answers **404**; a missing or wrong token answers **401** (rate-limited per hashed address). JSON, no CORS headers, `Cache-Control: no-store`. Times in answers are ISO 8601 strings (`createdAt`, `lastVoteAt`, `latestVoteAt`, `galleryGenerated`, `dismissedAt`); the `since` parameter is milliseconds since 1970. The reads are `GET` (another method answers 405); the dismiss, restore and scene status actions are `POST` with a JSON body (at most 4 KB; the bulk scene status 128 KB). Errors are `{ "error": "<code>", "message": "…" }`.
+
+**Scene status** (handled by the maintainer, see [`POST /api/admin/scenes/<scene>/status`](#post-apiadminscenesscenestatus--post-apiadminscenesstatus)): a scene can be marked `done` (the feedback was worked on) or `declined` (it stays as it is), with a short note. The prompt leaves a marked scene out unless votes came in **after** the mark – then only those – and lists declined scenes at the end so they are not proposed again.
 
 **Dismissed votes** (reset by the maintainer, see [Votes and the deck](#votes-and-the-deck)) count nowhere: `/summary`, `/scenes`, `/prompt` and `/export` leave them out, and so does `/votes` unless asked with `dismissed=include|only`.
 
@@ -124,19 +126,36 @@ Dismiss every vote of one person that still counts – all runs, or only one sce
                "voters": 6, "upVoters": 2, "downVoters": 4, "skipVoters": 0,
                "lastVerdict": "down", "lastVoteAt": "2026-11-19T06:40:00.000Z", "current": true,
                "file": "shots/home--desktop-light.png", "thumb": "shots/home--desktop-light.png",
-               "history": [{ "galleryGenerated": "2026-11-18T02:00:00.000Z", "commitShort": "9f8e7d6", "up": 1, "down": 3 }] }]
+               "history": [{ "galleryGenerated": "2026-11-18T02:00:00.000Z", "commitShort": "9f8e7d6", "up": 1, "down": 3 }],
+               "status": null, "sinceMark": null }]
 }
 ```
+
+`status` is the maintainer's mark (`null` while open): `{ "status": "done" | "declined", "note": "Seitenleiste schmaler", "markedAt": "…", "markedBy": "maintainer@example.org" }`; `sinceMark` counts the votes that came in after it (`{ "up", "down", "skip", "comments" }`, `null` without a mark).
 
 One entry per voted scene, sorted by 👎 votes (then latest vote). `up`, `down`, `skip` count votes (one per person and image, so a person can add several per scene – one per variant); `voters` counts the distinct people with any vote on the scene, `upVoters`/`downVoters`/`skipVoters` those with at least one vote of that verdict (a person with 👍 on desktop and 👎 on phone is in both). `group`, `title` and `lastVerdict` come from the newest vote; `current` means the newest vote is on an image the current gallery still shows. `file` and `thumb` (relative to `GALLERY_URL`) are the current gallery's `desktop-light` shot of the scene, else its first variant; both are left out when the scene is no longer in the gallery. `history` is the trend: 👍/👎 per gallery run, oldest first.
 
 ### `GET /api/admin/prompt?scope=current|all&group=&includeUp=0|1`
 
 ```jsonc
-{ "prompt": "# Design-Feedback aus flowplan-vote (Galerie vom 19. Nov. 2026, Commit a1b2c3d)\n…", "scenes": 4 }
+{ "prompt": "# Design-Feedback aus flowplan-vote (Galerie vom 19. Nov. 2026, Commit a1b2c3d)\n…", "scenes": 4,
+  "sceneIds": ["home", "tasks", "db-board", "dialog-share"], // the 👎 scenes in the prompt, in its order
+  "leftOut": 2,                                             // marked scenes left out (no votes since their mark)
+  "declined": ["login"] }                                   // declined scenes listed at the end
 ```
 
-A German Markdown instruction for Claude Code: per 👎 scene the scene id, group, title, the variants voted down, the share of voters (`- 👎: 4 von 6 Bewertenden (67 %)` – distinct people with a 👎 out of the distinct people with a 👍 or 👎 on the scene, in scope), the image links (`${GALLERY_URL}/<file>`) and the comments of the 👎 votes verbatim as quotes with their variant. The 👎 scenes are ranked by that share, then by the number of 👎 voters, then in the gallery's order. The prompt contains **no logins or names** – only counts – since in open mode they are strangers' personal data (the `/votes` list and `/export` still carry `login`, for the admin only). `scope=current` (default) only counts votes on the current images; `scope=all` every vote. `group` limits it to one group. `includeUp=1` adds the 👍 scenes without any 👎 as "Gefällt (nicht anfassen)". It ends with: "Bitte wie bei /design-review: Screenshots ansehen, Befunde mit Vorschlägen auflisten und mich fragen, was umgesetzt wird – nichts ändern vor meinem OK." `scenes` is the number of 👎 scenes.
+A German Markdown instruction for Claude Code: per 👎 scene the scene id, group, title, the variants voted down, the share of voters (`- 👎: 4 von 6 Bewertenden (67 %)` – distinct people with a 👎 out of the distinct people with a 👍 or 👎 on the scene, in scope), the image links (`${GALLERY_URL}/<file>`) and the comments of the 👎 votes verbatim as quotes with their variant. The 👎 scenes are ranked by that share, then by the number of 👎 voters, then in the gallery's order. The prompt contains **no logins or names** – only counts – since in open mode they are strangers' personal data (the `/votes` list and `/export` still carry `login`, for the admin only). `scope=current` (default) only counts votes on the current images; `scope=all` every vote. `group` limits it to one group. `includeUp=1` adds the 👍 scenes without any 👎 as "Gefällt (nicht anfassen)". **Handled scenes**: a scene marked `done` or `declined` is left out – unless 👍/👎 votes came in after `markedAt` (a changed vote counts as new): then it comes back with only those newer votes and the line `- Zuletzt als erledigt markiert am 21. Nov. 2026 (<note>) – hier nur die Stimmen danach` (`abgelehnt` for a declined one). Declined scenes that did not come back are listed under `## Nicht erneut vorschlagen (abgelehnt)` as `` - `<scene>` – <title> – <note> `` (no votes; with `group`, only that group's), so /design-review does not propose them again. Who marked never goes into the prompt. It ends with: "Bitte wie bei /design-review: Screenshots ansehen, Befunde mit Vorschlägen auflisten und mich fragen, was umgesetzt wird – nichts ändern vor meinem OK." `scenes` is the number of 👎 scenes, `sceneIds` their ids (for "mark every scene of this prompt as done" with one bulk call).
+
+### `POST /api/admin/scenes/<scene>/status` · `POST /api/admin/scenes/status`
+
+```jsonc
+// one scene (URL-encoded id): body { "status": "done" | "declined" | "open", "note": "Seitenleiste schmaler", "by": "maintainer@example.org" }
+{ "scene": "home", "status": { "status": "done", "note": "Seitenleiste schmaler", "markedAt": "2026-11-23T10:00:00.000Z", "markedBy": "maintainer@example.org" }, "changed": true }
+// several: body { "scenes": ["home", "tasks"], "status": "done", "note": "", "by": "maintainer@example.org" }
+{ "status": "done", "scenes": ["home", "tasks"], "updated": 2, "markedAt": "2026-11-23T10:00:00.000Z" }
+```
+
+Marks a scene `done` or `declined`, or takes the mark away (`open`; `status` is then `null`, `changed` `false` when there was none). `by` (who marks, one line, at most 200 characters) is required for `done` and `declined`; `note` is optional, one line (control characters removed), at most 300 characters. Marking again replaces status and note and moves `markedAt` to now – every vote until then counts as handled. The bulk call takes 1–500 scene ids (duplicates once) with one shared `markedAt`; `updated` counts the scenes changed. Errors: **400** `invalid_status`, `invalid_by`, `invalid_note`, `invalid_scene`, `invalid_scenes`; another method **405**. Scene ids are not checked against the gallery (a scene can be marked before it has votes).
 
 ### `GET /api/admin/export?format=csv|json`
 
@@ -146,7 +165,7 @@ Every vote that counts (not dismissed; fields as in `/votes`, newest first) as a
 
 - No tracking, no analytics, no external fonts, scripts or CDNs.
 - Cookies: the session (`fv_session`, httpOnly, SameSite=Lax, Secure under https, 30 days; the database keeps only its SHA-256; signing out deletes it); during sign-in a ten-minute `fv_oauth` cookie for the OAuth `state`; the language cookie `fv_lang` only after the visitor switches the language. `localStorage` holds unsent votes only while offline.
-- Sign-in reads `GET /user` once with the user's OAuth token; the token is not stored. Stored per allowed user: GitHub id, login and name (the account's `created_at` is only compared, never stored). Nothing is stored about refused sign-ins. A vote reset by the maintainer keeps when and by whom (the identifier flowplan-admin sends) until it is restored or voted again.
+- Sign-in reads `GET /user` once with the user's OAuth token; the token is not stored. Stored per allowed user: GitHub id, login and name (the account's `created_at` is only compared, never stored). Nothing is stored about refused sign-ins. A scene's status keeps when and by whom (the identifier flowplan-admin sends) it was marked, until it is marked again or reset. A vote reset by the maintainer keeps when and by whom (the identifier flowplan-admin sends) until it is restored or voted again.
 - IP addresses are never stored: sign-in and wrong admin tokens are rate-limited by a daily rotating HMAC of the address (`ipKey()`). Votes (and changes, undos) are limited per user (180 per minute, 1,000 per hour, 5,000 per day), the deck to 120 loads per minute; over the limit the API answers 429. Request bodies are size-limited.
 - CSRF: every writing request must carry an `Origin` (or, without it, a `Referer`) equal to the origin of `VOTE_URL`, else 403; plus SameSite=Lax.
 - A strict Content Security Policy (`proxy.ts`): scripts only with the per-request nonce (`strict-dynamic`), styles only from the stylesheet, no inline scripts or style attributes, images only from this site and the gallery, no framing.

@@ -3,8 +3,10 @@
 // every path answers 404. JSON only, no CORS headers (server to server).
 // Dismissed votes (dismissed_at set, see dismissVote) count nowhere: not in
 // the summary, the scenes, the prompt or the export; /votes and /voters show
-// them only where asked for.
-import { all, now, one, run } from "./db";
+// them only where asked for. A scene marked done or declined by the
+// maintainer (scene_status) counts in the prompt only with the votes after
+// its mark; declined ones are listed at its end.
+import { all, now, one, run, transaction } from "./db";
 import { HttpError, clientIp, int, json, readInput, str } from "./http";
 import { config } from "./config";
 import { safeEqual } from "./secret";
@@ -122,6 +124,82 @@ const requireUser = (raw: string) => {
   return user;
 };
 
+// ---- scene status (done / declined, set by the maintainer) ----
+
+export type SceneMarkStatus = "done" | "declined";
+type Mark = { scene: string; status: SceneMarkStatus; note: string; marked_at: number; marked_by: string };
+const marks = () => new Map(all<Mark>("SELECT scene,status,note,marked_at,marked_by FROM scene_status").map((m) => [m.scene, m] as const));
+const apiMark = (m: Mark | undefined) => (m ? { status: m.status, note: m.note, markedAt: iso(m.marked_at), markedBy: m.marked_by } : null);
+// Control and invisible characters out, on one line.
+const oneLine = (v: unknown, max: number) =>
+  str(v, max * 4 + 16)
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+export const MAX_NOTE = 300;
+export const MAX_BULK_SCENES = 500;
+function sceneIdOf(raw: unknown) {
+  const scene = oneLine(raw, 200);
+  if (!scene || [...scene].length > 200) throw new HttpError(400, "invalid_scene", "scene must be a scene id (one line, at most 200 characters).");
+  return scene;
+}
+function markStatusOf(raw: unknown): SceneMarkStatus | "open" {
+  if (raw === "done" || raw === "declined" || raw === "open") return raw;
+  throw new HttpError(400, "invalid_status", "status must be done, declined or open.");
+}
+function noteOf(input: Record<string, unknown>) {
+  const note = oneLine(input.note, MAX_NOTE);
+  if ([...note].length > MAX_NOTE) throw new HttpError(400, "invalid_note", `note longer than ${MAX_NOTE} characters.`);
+  return note;
+}
+// Who marks (flowplan-admin's identifier of the admin): required for done
+// and declined, one line, at most 200 characters.
+function markedBy(input: Record<string, unknown>) {
+  const by = oneLine(input.by, 200);
+  if (!by || [...by].length > 200) throw new HttpError(400, "invalid_by", "by (who marks) missing or longer than 200 characters.");
+  return by;
+}
+function writeMark(scene: string, status: SceneMarkStatus | "open", note: string, by: string, at: number) {
+  if (status === "open") return Number(run("DELETE FROM scene_status WHERE scene=?", scene).changes) > 0;
+  run(
+    `INSERT INTO scene_status(scene,status,note,marked_at,marked_by) VALUES(?,?,?,?,?)
+     ON CONFLICT(scene) DO UPDATE SET status=excluded.status, note=excluded.note, marked_at=excluded.marked_at, marked_by=excluded.marked_by`,
+    scene,
+    status,
+    note,
+    at,
+    by,
+  );
+  return true;
+}
+
+// POST /api/admin/scenes/<scene>/status {status: done|declined|open, note?, by}:
+// marking again moves marked_at to now (the votes until then count as handled);
+// open removes the mark (changed: false when there was none).
+export function setSceneStatus(rawScene: string, input: Record<string, unknown>) {
+  const scene = sceneIdOf(rawScene);
+  const status = markStatusOf(input.status);
+  const by = status === "open" ? "" : markedBy(input);
+  const note = status === "open" ? "" : noteOf(input);
+  const changed = writeMark(scene, status, note, by, now());
+  return { scene, status: apiMark(marks().get(scene)), changed };
+}
+
+// POST /api/admin/scenes/status {scenes: [...], status, note?, by}: the same
+// for several scenes at once (at most MAX_BULK_SCENES), one shared marked_at
+// – "mark every scene of this prompt as done".
+export function setScenesStatus(input: Record<string, unknown>) {
+  const status = markStatusOf(input.status);
+  if (!Array.isArray(input.scenes) || input.scenes.length === 0 || input.scenes.length > MAX_BULK_SCENES)
+    throw new HttpError(400, "invalid_scenes", `scenes must be a list of 1 to ${MAX_BULK_SCENES} scene ids.`);
+  const scenes = [...new Set(input.scenes.map(sceneIdOf))];
+  const by = status === "open" ? "" : markedBy(input);
+  const note = status === "open" ? "" : noteOf(input);
+  const at = now();
+  const updated = transaction(() => scenes.filter((scene) => writeMark(scene, status, note, by, at)).length);
+  return { status, scenes, updated, markedAt: status === "open" ? null : iso(at) };
+}
+
 // dismissed=exclude (default) | include | only
 function dismissedFilter(params: URLSearchParams) {
   const value = params.get("dismissed") || "exclude";
@@ -208,6 +286,18 @@ export async function adminScenes() {
     runs: Map<string, { galleryGenerated: string; commitShort: string; up: number; down: number }>;
   };
   const scenes = new Map<string, Scene>();
+  const marked = marks();
+  // Per marked scene: the votes that came in after the mark.
+  const since = new Map<string, { up: number; down: number; skip: number; comments: number }>();
+  for (const v of rows) {
+    const m = marked.get(v.scene);
+    if (m && v.created_at > m.marked_at) {
+      let c = since.get(v.scene);
+      if (!c) since.set(v.scene, (c = { up: 0, down: 0, skip: 0, comments: 0 }));
+      c[v.verdict]++;
+      if (v.comment) c.comments++;
+    }
+  }
   for (const v of rows) {
     let s = scenes.get(v.scene);
     if (!s) {
@@ -236,6 +326,9 @@ export async function adminScenes() {
     // Relative to GALLERY_URL; left out when the scene is no longer in the gallery.
     ...(images.get(s.scene) ?? {}),
     history: [...runs.values()].sort((a, b) => a.galleryGenerated.localeCompare(b.galleryGenerated)),
+    // done / declined by the maintainer (null = open), and the votes since.
+    status: apiMark(marked.get(s.scene)),
+    sinceMark: marked.has(s.scene) ? (since.get(s.scene) ?? { up: 0, down: 0, skip: 0, comments: 0 }) : null,
   }));
   list.sort((a, b) => b.down - a.down || b.lastVoteAt.localeCompare(a.lastVoteAt));
   return { scenes: list };
@@ -252,7 +345,16 @@ export async function adminPrompt(params: URLSearchParams) {
   const hashes = currentHashes(g);
   const files = new Map((g?.shots ?? []).map((x) => [shotKey(x), x.file]));
   const rows = all<Row>(`${SELECT} WHERE ${V_ACTIVE} AND v.verdict IN ('up','down')${group ? " AND v.grp=?" : ""} ORDER BY v.created_at ASC, v.id ASC`, ...(group ? [group] : []));
-  const inScope = rows.filter((v) => scope === "all" || isCurrent(hashes, v));
+  const scoped = rows.filter((v) => scope === "all" || isCurrent(hashes, v));
+  // A scene marked done or declined counts only with the votes after its
+  // mark; without any it is left out (declined ones are listed at the end).
+  const marked = marks();
+  const inScope = scoped.filter((v) => {
+    const m = marked.get(v.scene);
+    return !m || v.created_at > m.marked_at;
+  });
+  const kept = new Set(inScope.map((v) => v.scene));
+  const leftOut = new Set(scoped.filter((v) => marked.has(v.scene) && !kept.has(v.scene)).map((v) => v.scene));
   // No logins in the prompt (in open mode they are strangers' personal
   // data): people are counted by user id, comments go in without a name.
   type Entry = { scene: string; group: string; title: string; variants: Set<string>; voters: Set<number>; comments: { variant: string; text: string }[] };
@@ -295,6 +397,7 @@ export async function adminPrompt(params: URLSearchParams) {
     const file = files.get(shotKey({ scene, variant })) || `shots/${scene}--${variant}.png`;
     return imageUrl({ url: galleryUrl }, file);
   };
+  const markDate = (ms: number) => formatDate("de", ms, config.timeZone());
   const quote = (text: string) => text.split("\n").map((line) => `> ${line}`).join("\n");
 
   const lines: string[] = [`# Design-Feedback aus flowplan-vote (Galerie vom ${date}, Commit ${commitShort})`, ""];
@@ -314,6 +417,8 @@ export async function adminPrompt(params: URLSearchParams) {
     for (const e of downList) {
       lines.push(`### ${e.title || e.scene}`, "");
       lines.push(`- Szene: \`${e.scene}\``, `- Gruppe: ${e.group}`, `- Varianten mit 👎: ${[...e.variants].join(", ")}`, `- 👎: ${e.voters.size} von ${raters.get(e.scene)?.size ?? e.voters.size} Bewertenden (${Math.round(share(e) * 100)} %)`);
+      const m = marked.get(e.scene);
+      if (m) lines.push(`- Zuletzt als ${m.status === "done" ? "erledigt" : "abgelehnt"} markiert am ${markDate(m.marked_at)}${m.note ? ` (${m.note})` : ""} – hier nur die Stimmen danach`);
       lines.push(`- Bilder:`);
       for (const variant of e.variants) lines.push(`  - ${variant}: ${link(e.scene, variant)}`);
       if (e.comments.length) {
@@ -330,10 +435,34 @@ export async function adminPrompt(params: URLSearchParams) {
       lines.push("");
     }
   }
+  // Declined scenes (that did not come back with a 👎): never propose them again.
+  const shown = new Set(downList.map((e) => e.scene));
+  const info = new Map((g?.shots ?? []).map((x) => [x.scene, { group: x.group, title: x.title }] as const));
+  const declined = [...marked.values()]
+    .filter((m) => m.status === "declined" && !shown.has(m.scene))
+    .map((m) => {
+      const last = info.get(m.scene) ?? one<{ group: string; title: string }>(`SELECT grp AS "group", title FROM votes WHERE scene=? ORDER BY created_at DESC, id DESC LIMIT 1`, m.scene);
+      return { ...m, group: last?.group ?? "", title: last?.title ?? "" };
+    })
+    .filter((m) => !group || m.group === group)
+    .sort((a, b) => (order.get(a.scene) ?? 1e9) - (order.get(b.scene) ?? 1e9) || a.scene.localeCompare(b.scene));
+  if (declined.length) {
+    lines.push("## Nicht erneut vorschlagen (abgelehnt)", "");
+    for (const m of declined) lines.push(`- \`${m.scene}\`${m.title && m.title !== m.scene ? ` – ${m.title}` : ""}${m.note ? ` – ${m.note}` : ""}`);
+    lines.push("");
+  }
   lines.push(
     "Bitte wie bei /design-review: Screenshots ansehen, Befunde mit Vorschlägen auflisten und mich fragen, was umgesetzt wird – nichts ändern vor meinem OK.",
   );
-  return { prompt: lines.join("\n"), scenes: downList.length };
+  return {
+    prompt: lines.join("\n"),
+    scenes: downList.length,
+    // The 👎 scenes in the prompt (for "mark them all as done"), the marked
+    // scenes left out (no votes since their mark) and the declined ones listed.
+    sceneIds: downList.map((e) => e.scene),
+    leftOut: leftOut.size,
+    declined: declined.map((m) => m.scene),
+  };
 }
 
 // GET /api/admin/export?format=csv|json: every vote that counts (not dismissed), newest first.
@@ -457,17 +586,31 @@ export function restoreUserVotes(rawUser: string, input: Record<string, unknown>
   return { user: { userId: user.id, login: user.login }, scene, restored: Number(result.changes) };
 }
 
+const decodeSegment = (s: string) => {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+};
+
 const READS = new Set(["summary", "votes", "voters", "scenes", "prompt", "export"]);
 
 // `path`: the segments after /api/admin/ (a string is split at "/").
 export async function adminRoute(request: Request, path: string | string[]) {
   requireAdmin(request);
-  const parts = (typeof path === "string" ? path.split("/") : path).filter(Boolean);
+  // A string (tests) is still URL-encoded; Next.js hands over decoded segments.
+  const parts = (typeof path === "string" ? path.split("/").map(decodeSegment) : path).filter(Boolean);
   const params = new URL(request.url).searchParams;
   const method = request.method.toUpperCase();
   if (parts.length === 1 && READS.has(parts[0])) {
     if (method !== "GET" && method !== "HEAD") throw new HttpError(405, "method_not_allowed", "Method not allowed.");
     return adminRead(parts[0], params);
+  }
+  if (parts[0] === "scenes" && parts.length >= 2 && parts[parts.length - 1] === "status") {
+    if (method !== "POST") throw new HttpError(405, "method_not_allowed", "Method not allowed.");
+    if (parts.length === 2) return json(setScenesStatus(await readInput(request, 128 * 1024)));
+    return json(setSceneStatus(parts.slice(1, -1).join("/"), await readInput(request, 4 * 1024)));
   }
   const action = parts.length === 3 ? parts[2] : "";
   if ((parts[0] !== "votes" && parts[0] !== "voters") || (action !== "dismiss" && action !== "restore")) throw new HttpError(404, "not_found", "Not found.");
